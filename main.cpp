@@ -57,16 +57,19 @@ std::vector<char *> arg2argc(const std::vector<std::string>& args) {
 struct proc_status {
 
     enum class state {
-        STARTED, SIGNALED, STOPPED
+        STARTED, SIGNALED, STOPPED, USER_STOPPED
     };
 
-    static std::string state2str(state state) {
+    static std::string state2str(state state) noexcept {
         switch(state) {
             case state::STARTED: return "STARTED";
             case state::SIGNALED: return "SIGNALED";
             case state::STOPPED: return "STOPPED";
+            case state::USER_STOPPED: return "STOPPED";
         }
     }
+
+    int user_stop_fd = -1;
 
     pid_t pid = 0;
     int stdin_fd = -1;
@@ -83,7 +86,13 @@ struct proc_status {
     bool stopped_signal = false;
     bool continued = false;
 
-    void update_status(int status) {
+    void user_stop() const noexcept {
+        const char c = '\0';
+        assert(user_stop_fd != -1);
+        write(user_stop_fd, &c, sizeof(c));
+    }
+
+    void update_status(int status) noexcept {
         wstatus = status;
         /**
         WIFEXITED(status)
@@ -205,8 +214,8 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
     }
     sigprocmask(SIG_UNBLOCK, &signal_set, nullptr);
 
-    int close_pipe_read[2] = {-1};
-    assert(pipe2(close_pipe_read, O_CLOEXEC) >= 0);
+    int pipe_close_watch[2] = {-1};
+    assert(pipe2(pipe_close_watch, O_NONBLOCK | O_CLOEXEC) >= 0);
 
     proc_status proc{};
 
@@ -214,12 +223,15 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
     proc.stdin_fd = pipe_stdin[1];
     proc.running = true;
 
+    proc.user_stop_fd = pipe_close_watch[1];
+
     on_state_cb(proc_status::state::STARTED, proc);
 
     ssize_t rc;
     fd_set read_fd{};
 
     std::vector<int> watch_fds{
+        pipe_close_watch[0],
         pipe_stdout[0],
         pipe_stderr[0],
         pipe_signal[0]
@@ -230,7 +242,7 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
     std::array<char, BUFFER_SIZE> read_buffer{};
 
     bool proc_killed = false;
-
+    bool user_stopped = false;
     int status = 0;
 
     while(true) {
@@ -239,6 +251,7 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
         int save_errno = errno;
         do {
             FD_ZERO(&read_fd);
+            FD_SET(pipe_close_watch[0], &read_fd);
             FD_SET(pipe_stdout[0], &read_fd);
             FD_SET(pipe_stderr[0], &read_fd);
             FD_SET(pipe_signal[0], &read_fd);
@@ -330,45 +343,65 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
                 break;
             }
         }
+
+        if (FD_ISSET(pipe_close_watch[0], &read_fd)) {
+            user_stopped = true;
+
+            do {
+                if ((rc = read(pipe_close_watch[0], read_buffer.data(), read_buffer.size()-1)) < 0) {
+                    if(errno != EAGAIN) {
+                        std::cerr << "[" << pipe_close_watch[0] << "] could not read from fd : " << strerror(errno) << " (" << errno << ")" << std::endl;
+                    }
+                    break;
+                }
+                if (rc == 0) continue;
+            }while(true);
+
+            break;
+        }
     }
 
     //reset SIGCHLD signal handler
     signal(SIGCHLD, SIG_DFL);
 
-    // reading rest of the pipe_stdout buffer
-    do {
-        if ((rc = read(pipe_stdout[0], read_buffer.data(), read_buffer.size()-1)) < 0) {
-            if(errno != EAGAIN) {
-                std::cerr << "[" << pipe_stdout[0] << "] could not read from fd : " << strerror(errno) << " (" << errno << ")" << std::endl;
+    if(user_stopped) {
+        proc.user_stop_fd = -1;
+        on_state_cb(proc_status::state::USER_STOPPED, proc);
+    } else {
+        // reading rest of the pipe_stdout buffer
+        do {
+            if ((rc = read(pipe_stdout[0], read_buffer.data(), read_buffer.size()-1)) < 0) {
+                if(errno != EAGAIN) {
+                    std::cerr << "[" << pipe_stdout[0] << "] could not read from fd : " << strerror(errno) << " (" << errno << ")" << std::endl;
+                }
+                break;
             }
-            break;
-        }
-        if (rc == 0) continue;
-        read_buffer[rc] = 0;
-        stdout_cb(read_buffer.data(), rc);
-    }while(true);
+            if (rc == 0) continue;
+            read_buffer[rc] = 0;
+            stdout_cb(read_buffer.data(), rc);
+        }while(true);
 
-    // reading rest of the pipe_stderr buffer
-    do {
-        if ((rc = read(pipe_stderr[0], read_buffer.data(), read_buffer.size()-1)) < 0) {
-            if(errno != EAGAIN) {
-                std::cerr << "[" << pipe_stderr[0] << "] could not read from fd : " << strerror(errno) << " (" << errno << ")" << std::endl;
+        // reading rest of the pipe_stderr buffer
+        do {
+            if ((rc = read(pipe_stderr[0], read_buffer.data(), read_buffer.size()-1)) < 0) {
+                if(errno != EAGAIN) {
+                    std::cerr << "[" << pipe_stderr[0] << "] could not read from fd : " << strerror(errno) << " (" << errno << ")" << std::endl;
+                }
+                break;
             }
-            break;
-        }
-        if (rc == 0) continue;
-        read_buffer[rc] = 0;
-        stderr_cb(read_buffer.data(), rc);
-    }while(true);
+            if (rc == 0) continue;
+            read_buffer[rc] = 0;
+            stderr_cb(read_buffer.data(), rc);
+        }while(true);
 
-    on_state_cb(proc_status::state::STOPPED, proc);
+        on_state_cb(proc_status::state::STOPPED, proc);
+    }
 
-    close_pipe(close_pipe_read);
+    close_pipe(pipe_close_watch);
     close_pipe(pipe_signal);
     close_pipe(pipe_stdout);
     close_pipe(pipe_stderr);
     close_pipe(pipe_stdin);
-
 }
 
 void watch_process(const std::string& args, std::string& out, std::string& err) {
@@ -378,7 +411,6 @@ void watch_process(const std::string& args, std::string& out, std::string& err) 
 int main() {
     std::string out;
     std::string err;
-
 
     std::ostringstream stdout_oss;
     std::ostringstream stderr_oss;
