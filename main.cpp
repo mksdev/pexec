@@ -404,10 +404,6 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
     close_pipe(pipe_stdin);
 }
 
-void watch_process(const std::string& args, std::string& out, std::string& err) {
-
-}
-
 int main() {
     std::string out;
     std::string err;
