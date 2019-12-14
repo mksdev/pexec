@@ -178,7 +178,6 @@ void run_process(const std::string& spawn_process_arg, const fd_callback& stdout
         }
 
         if (FD_ISSET(pipe_signal[0], &read_fd)) {
-            std::cout << "signal pipe" << std::endl;
             int signal = 0;
 
             int read_from = 0;
@@ -201,9 +200,8 @@ void run_process(const std::string& spawn_process_arg, const fd_callback& stdout
                     pid_t ret;
                     int status;
                     auto save_errno = errno;
-                    errno = 0;
-
                     do {
+                        errno = 0;
                         if((ret = waitpid(proc_pid, &status, WNOHANG)) <= 0) {
                             std::cerr << "waitpid(" << proc_pid << ", " << status << ", 0) returned " << ret << std::endl;
                         }
