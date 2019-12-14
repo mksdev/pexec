@@ -7,3 +7,6 @@ add_executable(fork_watch
     main.cpp
     argument_parser.cpp
 )
+add_executable(simple_echo
+    simple_echo.cpp
+)

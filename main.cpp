@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <sstream>
+#include "argument_parser.h"
 
 int fd_set_nonblock(int fd) {
     return fcntl(fd, F_SETFL, O_NONBLOCK);
@@ -38,9 +39,118 @@ int pipe2(int* p, int flags) {
 }
 #endif
 
-#include "argument_parser.h"
+void close_pipe(int* pipe) {
+    close(pipe[0]);
+    close(pipe[1]);
+}
+
+std::vector<char *> arg2argc(const std::vector<std::string>& args) {
+    std::vector<char*> args_c;
+    args_c.reserve(args.size()+1);
+    for(auto& arg : args) {
+        args_c.emplace_back((char*)arg.c_str());
+    }
+    args_c.emplace_back(nullptr);
+    return args_c;
+}
+
+struct proc_status {
+
+    enum class state {
+        STARTED, SIGNALED, STOPPED
+    };
+
+    static std::string state2str(state state) {
+        switch(state) {
+            case state::STARTED: return "STARTED";
+            case state::SIGNALED: return "SIGNALED";
+            case state::STOPPED: return "STOPPED";
+        }
+    }
+
+    pid_t pid = 0;
+    int stdin_fd = -1;
+    bool running = false;
+
+    int wstatus = 0;
+
+    bool exited = false;
+    int return_code = 0;
+    bool signaled = false;
+    int signaled_signal = 0;
+    bool generated_core_dump = false;
+    bool stopped = false;
+    bool stopped_signal = false;
+    bool continued = false;
+
+    void update_status(int status) {
+        wstatus = status;
+        /**
+        WIFEXITED(status)
+            returns true if the child terminated normally, that is, by calling exit(3) or _exit(2), or by returning from main().
+        WEXITSTATUS(status)
+            returns the exit status of the child. This consists of the least significant 8 bits of the status argument that the child specified in a call to exit(3) or _exit(2) or as the argument for a return statement in main(). This macro should only be employed if WIFEXITED returned true.
+        WIFSIGNALED(status)
+            returns true if the child process was terminated by a signal.
+        WTERMSIG(status)
+            returns the number of the signal that caused the child process to terminate. This macro should only be employed if WIFSIGNALED returned true.
+        WCOREDUMP(status)
+            returns true if the child produced a core dump. This macro should only be employed if WIFSIGNALED returned true. This macro is not specified in POSIX.1-2001 and is not available on some UNIX implementations (e.g., AIX, SunOS). Only use this enclosed in #ifdef WCOREDUMP ... #endif.
+        WIFSTOPPED(status)
+            returns true if the child process was stopped by delivery of a signal; this is only possible if the call was done using WUNTRACED or when the child is being traced (see ptrace(2)).
+        WSTOPSIG(status)
+            returns the number of the signal which caused the child to stop. This macro should only be employed if WIFSTOPPED returned true.
+        WIFCONTINUED(status)
+            (since Linux 2.6.10) returns true if the child process was resumed by delivery of SIGCONT.
+        @return
+        */
+        exited = WIFEXITED(status);
+        if(exited) {
+            return_code = WEXITSTATUS(status);
+        }
+        signaled = WIFSIGNALED(status);
+        if(signaled) {
+            signaled_signal = WTERMSIG(status);
+            generated_core_dump = WCOREDUMP(status);
+        }
+        stopped = WIFSTOPPED(status);
+        if(stopped) {
+            stopped_signal = WSTOPSIG(status);
+        }
+        continued = WIFCONTINUED(status);
+
+        running = !(signaled || exited);
+    }
+};
+
+std::ostream& operator<<(std::ostream& out, proc_status& proc) {
+    out << "pid: " << proc.pid << "\n";
+    out << "running: " << proc.running << "\n";
+    out << "status: " << proc.wstatus << "\n";
+    if(proc.running) {
+        out << "stdin_fd: " << proc.stdin_fd << "\n";
+    }
+    if(proc.exited) {
+        out << "exited: " << proc.exited << "\n"
+          << "return_code: " << proc.return_code << "\n";
+    }
+    if(proc.signaled) {
+        out << "signaled: " << proc.signaled << "\n"
+            << "signaled_signal: " << proc.signaled_signal << " (" << strsignal(proc.signaled_signal) << ")" << "\n"
+            << "generated_core_dump: " << proc.generated_core_dump << "\n";
+    }
+    if(proc.stopped) {
+        out << "stopped: " << proc.stopped << "\n"
+            << "stopped_signal: " << proc.stopped_signal << " (" << strsignal(proc.stopped_signal) << ")" << "\n";
+    }
+    if(proc.continued) {
+        out << "continued: " << proc.continued;
+    }
+    return out;
+}
 
 using fd_callback = std::function<void(char * buffer, std::size_t size)>;
+using fd_state_callback = std::function<void(proc_status::state, proc_status&)>;
 
 int pipe_signal[2] = {-1};
 
@@ -49,7 +159,7 @@ void signal_handler(int sig) {
 }
 
 template<int BUFFER_SIZE = 1024>
-void run_process(const std::string& spawn_process_arg, const fd_callback& stdout_cb, const fd_callback& stderr_cb) {
+void run_process(const std::string& spawn_process_arg, const fd_state_callback& on_state_cb, const fd_callback& stdout_cb, const fd_callback& stderr_cb) {
 
     assert(pipe2(pipe_signal, O_CLOEXEC | O_NONBLOCK) >= 0);
 
@@ -71,36 +181,25 @@ void run_process(const std::string& spawn_process_arg, const fd_callback& stdout
     assert(pipe2(pipe_stdout, O_NONBLOCK) >= 0);
     assert(pipe2(pipe_stderr, O_NONBLOCK) >= 0);
 
+    auto args = util::str2arg(spawn_process_arg);
+    assert(!args.empty());
+    auto args_c = arg2argc(args);
+
     sigprocmask(SIG_BLOCK, &signal_set, nullptr);
     auto proc_pid = fork();
     assert(proc_pid != -1);
     if(proc_pid == 0) {
         //child
-        auto args = util::str2arg(spawn_process_arg);
-        assert(!args.empty());
-
-        std::vector<char*> args_c;
-        args_c.reserve(args.size()+1);
-        for(auto& arg : args) {
-            args_c.emplace_back((char*)arg.c_str());
-        }
-        args_c.emplace_back(nullptr);
-
-        close(pipe_stdin[1]);
         assert(dup2(pipe_stdin[0], STDIN_FILENO) == STDIN_FILENO);
-        close(pipe_stdin[0]);
-
-        close(pipe_stdout[0]);
         assert(dup2(pipe_stdout[1], STDOUT_FILENO) == STDOUT_FILENO);
-        close(pipe_stdout[1]);
-
-        close(pipe_stderr[0]);
         assert(dup2(pipe_stderr[1], STDERR_FILENO) == STDERR_FILENO);
-        close(pipe_stderr[1]);
+
+        close_pipe(pipe_stdin);
+        close_pipe(pipe_stdout);
+        close_pipe(pipe_stderr);
 
         assert(args_c.size() >= 2); // name + nullptr
         execvp(args_c[0], args_c.data());
-
         //only when file in args_c[0] not found, should not happen
         _Exit(1);
     }
@@ -108,6 +207,14 @@ void run_process(const std::string& spawn_process_arg, const fd_callback& stdout
 
     int close_pipe_read[2] = {-1};
     assert(pipe2(close_pipe_read, O_CLOEXEC) >= 0);
+
+    proc_status proc{};
+
+    proc.pid = proc_pid;
+    proc.stdin_fd = pipe_stdin[1];
+    proc.running = true;
+
+    on_state_cb(proc_status::state::STARTED, proc);
 
     ssize_t rc;
     fd_set read_fd{};
@@ -124,11 +231,7 @@ void run_process(const std::string& spawn_process_arg, const fd_callback& stdout
 
     bool proc_killed = false;
 
-    bool proc_exited = false;
-    int proc_return_code = 0;
-
-    bool proc_signalled = false;
-    int proc_signal_term = 0;
+    int status = 0;
 
     while(true) {
 
@@ -198,9 +301,10 @@ void run_process(const std::string& spawn_process_arg, const fd_callback& stdout
                     sigprocmask(SIG_BLOCK, &signal_set, nullptr);
 
                     pid_t ret;
-                    int status;
-                    auto save_errno = errno;
+
+                    save_errno = errno;
                     do {
+                        status = 0;
                         errno = 0;
                         if((ret = waitpid(proc_pid, &status, WNOHANG)) <= 0) {
                             std::cerr << "waitpid(" << proc_pid << ", " << status << ", 0) returned " << ret << std::endl;
@@ -208,17 +312,11 @@ void run_process(const std::string& spawn_process_arg, const fd_callback& stdout
                     } while(errno == EINTR);
                     errno = save_errno;
 
-                    bool exited = WIFEXITED(status);
-                    bool signalled = WIFSIGNALED(status);
-                    if (exited || signalled) {
-                        if(exited) {
-                            proc_exited = true;
-                            proc_return_code = WEXITSTATUS(status);
-                        }
-                        if(signalled) {
-                            proc_signalled = true;
-                            proc_signal_term = WTERMSIG(status);
-                        }
+                    proc.update_status(status);
+                    on_state_cb(proc_status::state::SIGNALED, proc);
+
+                    if (!proc.running) {
+                        proc.stdin_fd = -1;
                         proc_killed = true;
                     }
                     sigprocmask(SIG_UNBLOCK, &signal_set, nullptr);
@@ -228,9 +326,7 @@ void run_process(const std::string& spawn_process_arg, const fd_callback& stdout
                     std::cout << "signal not handled: " << signal << ", " << strsignal(signal) << std::endl;
                 }
             }
-
             if(proc_killed) {
-                //while loop
                 break;
             }
         }
@@ -265,54 +361,62 @@ void run_process(const std::string& spawn_process_arg, const fd_callback& stdout
         stderr_cb(read_buffer.data(), rc);
     }while(true);
 
-    close(close_pipe_read[0]);
-    close(close_pipe_read[1]);
+    on_state_cb(proc_status::state::STOPPED, proc);
 
-    close(pipe_signal[0]);
-    close(pipe_signal[1]);
+    close_pipe(close_pipe_read);
+    close_pipe(pipe_signal);
+    close_pipe(pipe_stdout);
+    close_pipe(pipe_stderr);
+    close_pipe(pipe_stdin);
 
-    close(pipe_stdout[0]);
-    close(pipe_stdout[1]);
-
-    close(pipe_stdin[0]);
-    close(pipe_stdin[1]);
-
-    close(pipe_stderr[0]);
-    close(pipe_stderr[1]);
-
-    std::cout << "process " << proc_pid << " stopped" << std::endl;
-    if(proc_exited) {
-        std::cout << "return code: " << proc_return_code << std::endl;
-    }
-    if(proc_signalled) {
-        std::cout << "by signal: " << strsignal(proc_signal_term) << " (" << proc_signal_term << ")" << std::endl;
-    }
 }
 
 void watch_process(const std::string& args, std::string& out, std::string& err) {
-    std::ostringstream stdout_oss;
-    std::ostringstream stderr_oss;
-    //data is in chunks that needs to be merged
-    fd_callback stdout_cb = [&](char* data, std::size_t len){
-        stdout_oss << data;
-    };
 
-    fd_callback stderr_cb = [&](char* data, std::size_t len){
-        stderr_oss << data;
-    };
-
-    run_process<8048>(args, stdout_cb, stderr_cb);
-
-    out = stdout_oss.str();
-    err = stderr_oss.str();
 }
-
 
 int main() {
     std::string out;
     std::string err;
 
-    watch_process("ls -l /Library", out, err);
+
+    std::ostringstream stdout_oss;
+    std::ostringstream stderr_oss;
+    //data is in chunks that needs to be merged
+    fd_callback stdout_cb = [&](char* data, std::size_t len){
+        std::cout << "read stdout(size=" << len << "): \n" << data << std::endl;
+        stdout_oss << data;
+    };
+    fd_callback stderr_cb = [&](char* data, std::size_t len){
+        std::cout << "read stderr(size=" << len << "): \n" << data << std::endl;
+        stderr_oss << data;
+    };
+    fd_state_callback state_cb = [&](proc_status::state state, proc_status& proc) {
+        std::cout << "process " << proc_status::state2str(state) << ": \n" << proc << std::endl;
+        std::cout << std::endl;
+
+        if(state == proc_status::state::STARTED) {
+            for(int i = 0; i != 10; ++i) {
+                std::ostringstream oss;
+                oss << "line " << i << "\n";
+                auto str = oss.str();
+                //write line to input
+                write(proc.stdin_fd, str.data(), str.size());
+            }
+
+            //stop program
+            std::string str = "exit\n";
+            write(proc.stdin_fd, str.data(), str.size());
+
+            //stop with signal
+            //kill(proc.pid, SIGTERM);
+            //kill(proc.pid, SIGKILL);
+        }
+    };
+    run_process<1024>("./simple_echo", state_cb, stdout_cb, stderr_cb);
+
+    out = stdout_oss.str();
+    err = stderr_oss.str();
 
     std::cout << "output(size=" << out.size() << "): \n" << out << std::endl;
     std::cout << "error(size=" << err.size() << "): \n" << err << std::endl;
