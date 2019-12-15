@@ -170,30 +170,38 @@ void signal_handler(int sig) {
 template<int BUFFER_SIZE = 1024>
 void run_process(const std::string& spawn_process_arg, const fd_state_callback& on_state_cb, const fd_callback& stdout_cb, const fd_callback& stderr_cb) {
 
-    assert(pipe2(pipe_signal, O_CLOEXEC | O_NONBLOCK) >= 0);
+    auto pipe_flags = O_CLOEXEC | O_NONBLOCK;
 
+    assert(pipe2(pipe_signal, pipe_flags) >= 0);
+
+    // set signal handler for SIGCHILD
     struct sigaction sa{};
     sa.sa_handler = signal_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     assert(::sigaction(SIGCHLD, &sa, nullptr) != -1);
 
+    // create signal blocking
     sigset_t signal_set;
     sigemptyset(&signal_set);
     sigaddset(&signal_set, SIGCHLD);
 
+    // create communication pipes
     int pipe_stdin[2] = {-1};
     int pipe_stdout[2] = {-1};
     int pipe_stderr[2] = {-1};
 
-    assert(pipe2(pipe_stdin, O_NONBLOCK) >= 0);
-    assert(pipe2(pipe_stdout, O_NONBLOCK) >= 0);
-    assert(pipe2(pipe_stderr, O_NONBLOCK) >= 0);
+    assert(pipe2(pipe_stdin, pipe_flags) >= 0);
+    assert(pipe2(pipe_stdout, pipe_flags) >= 0);
+    assert(pipe2(pipe_stderr, pipe_flags) >= 0);
 
+    // parse program agrumets to the array
     auto args = util::str2arg(spawn_process_arg);
     assert(!args.empty());
     auto args_c = arg2argc(args);
+    assert(args_c.size() >= 2); // name + nullptr
 
+    // spawn process
     sigprocmask(SIG_BLOCK, &signal_set, nullptr);
     auto proc_pid = fork();
     assert(proc_pid != -1);
@@ -202,27 +210,22 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
         assert(dup2(pipe_stdin[0], STDIN_FILENO) == STDIN_FILENO);
         assert(dup2(pipe_stdout[1], STDOUT_FILENO) == STDOUT_FILENO);
         assert(dup2(pipe_stderr[1], STDERR_FILENO) == STDERR_FILENO);
-
-        close_pipe(pipe_stdin);
-        close_pipe(pipe_stdout);
-        close_pipe(pipe_stderr);
-
-        assert(args_c.size() >= 2); // name + nullptr
+        //execute program
         execvp(args_c[0], args_c.data());
         //only when file in args_c[0] not found, should not happen
         _Exit(1);
     }
     sigprocmask(SIG_UNBLOCK, &signal_set, nullptr);
 
+    // create pipe for escaping from select
     int pipe_close_watch[2] = {-1};
-    assert(pipe2(pipe_close_watch, O_NONBLOCK | O_CLOEXEC) >= 0);
+    assert(pipe2(pipe_close_watch, pipe_flags) >= 0);
 
+    // process structure
     proc_status proc{};
-
     proc.pid = proc_pid;
     proc.stdin_fd = pipe_stdin[1];
     proc.running = true;
-
     proc.user_stop_fd = pipe_close_watch[1];
 
     on_state_cb(proc_status::state::STARTED, proc);
@@ -230,6 +233,7 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
     ssize_t rc;
     fd_set read_fd{};
 
+    // file descriptors we will watch with select
     std::vector<int> watch_fds{
         pipe_close_watch[0],
         pipe_stdout[0],
@@ -251,10 +255,9 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
         int save_errno = errno;
         do {
             FD_ZERO(&read_fd);
-            FD_SET(pipe_close_watch[0], &read_fd);
-            FD_SET(pipe_stdout[0], &read_fd);
-            FD_SET(pipe_stderr[0], &read_fd);
-            FD_SET(pipe_signal[0], &read_fd);
+            for(auto&& fd : watch_fds) {
+                FD_SET(fd, &read_fd);
+            }
 
             int select_ret = 0;
             errno = 0;
