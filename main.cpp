@@ -170,9 +170,7 @@ void signal_handler(int sig) {
 template<int BUFFER_SIZE = 1024>
 void run_process(const std::string& spawn_process_arg, const fd_state_callback& on_state_cb, const fd_callback& stdout_cb, const fd_callback& stderr_cb) {
 
-    auto pipe_flags = O_CLOEXEC | O_NONBLOCK;
-
-    assert(pipe2(pipe_signal, pipe_flags) >= 0);
+    assert(pipe2(pipe_signal, O_CLOEXEC | O_NONBLOCK) >= 0);
 
     // set signal handler for SIGCHILD
     struct sigaction sa{};
@@ -191,9 +189,9 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
     int pipe_stdout[2] = {-1};
     int pipe_stderr[2] = {-1};
 
-    assert(pipe2(pipe_stdin, pipe_flags) >= 0);
-    assert(pipe2(pipe_stdout, pipe_flags) >= 0);
-    assert(pipe2(pipe_stderr, pipe_flags) >= 0);
+    assert(pipe2(pipe_stdin, O_NONBLOCK) >= 0);
+    assert(pipe2(pipe_stdout, O_NONBLOCK) >= 0);
+    assert(pipe2(pipe_stderr, O_NONBLOCK) >= 0);
 
     // parse program agrumets to the array
     auto args = util::str2arg(spawn_process_arg);
@@ -210,6 +208,11 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
         assert(dup2(pipe_stdin[0], STDIN_FILENO) == STDIN_FILENO);
         assert(dup2(pipe_stdout[1], STDOUT_FILENO) == STDOUT_FILENO);
         assert(dup2(pipe_stderr[1], STDERR_FILENO) == STDERR_FILENO);
+
+        close_pipe(pipe_stdout);
+        close_pipe(pipe_stderr);
+        close_pipe(pipe_stdin);
+
         //execute program
         execvp(args_c[0], args_c.data());
         //only when file in args_c[0] not found, should not happen
@@ -219,7 +222,7 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
 
     // create pipe for escaping from select
     int pipe_close_watch[2] = {-1};
-    assert(pipe2(pipe_close_watch, pipe_flags) >= 0);
+    assert(pipe2(pipe_close_watch, O_CLOEXEC | O_NONBLOCK) >= 0);
 
     // process structure
     proc_status proc{};
