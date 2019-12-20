@@ -10,3 +10,7 @@ add_executable(fork_watch
 add_executable(simple_echo
     simple_echo.cpp
 )
+
+add_executable(simple_in
+    simple_in.cpp
+)

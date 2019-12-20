@@ -12,11 +12,21 @@
 #include "argument_parser.h"
 
 int fd_set_nonblock(int fd) {
-    return fcntl(fd, F_SETFL, O_NONBLOCK);
+    int flags = fcntl(fd, F_GETFL, 0);
+    flags |= O_NONBLOCK;
+    return fcntl(fd, F_SETFL, flags);
 }
 
 int fd_set_cloexec(int fd) {
-    return fcntl(fd, F_SETFL, O_CLOEXEC);
+    int flags = fcntl(fd, F_GETFL, 0);
+    flags |= O_CLOEXEC;
+    return fcntl(fd, F_SETFL, flags);
+}
+
+int fd_unset_nonblock(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    flags &= ~O_NONBLOCK;
+    return fcntl(fd, F_SETFL, flags);
 }
 
 #if defined __APPLE__
@@ -204,6 +214,11 @@ void run_process(const std::string& spawn_process_arg, const fd_state_callback& 
     auto proc_pid = fork();
     assert(proc_pid != -1);
     if(proc_pid == 0) {
+
+        fd_unset_nonblock(pipe_stdin[0]);
+        fd_unset_nonblock(pipe_stdout[1]);
+        fd_unset_nonblock(pipe_stderr[1]);
+
         //child
         assert(dup2(pipe_stdin[0], STDIN_FILENO) == STDIN_FILENO);
         assert(dup2(pipe_stdout[1], STDOUT_FILENO) == STDOUT_FILENO);
@@ -429,25 +444,8 @@ int main() {
         std::cout << "process " << proc_status::state2str(state) << ": \n" << proc << std::endl;
         std::cout << std::endl;
 
-        if(state == proc_status::state::STARTED) {
-            for(int i = 0; i != 10; ++i) {
-                std::ostringstream oss;
-                oss << "line " << i << "\n";
-                auto str = oss.str();
-                //write line to input
-                write(proc.stdin_fd, str.data(), str.size());
-            }
-
-            //stop program
-            std::string str = "exit\n";
-            write(proc.stdin_fd, str.data(), str.size());
-
-            //stop with signal
-            //kill(proc.pid, SIGTERM);
-            //kill(proc.pid, SIGKILL);
-        }
     };
-    run_process<1024>("./simple_echo", state_cb, stdout_cb, stderr_cb);
+    run_process<1024>("./simple_in", state_cb, stdout_cb, stderr_cb);
 
     out = stdout_oss.str();
     err = stderr_oss.str();
