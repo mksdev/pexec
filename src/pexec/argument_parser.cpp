@@ -6,6 +6,7 @@
 #include <iostream>
 #include "argument_parser.h"
 
+namespace pexec {
 namespace util {
 
 template<typename Out>
@@ -71,41 +72,5 @@ std::string arg2str(const std::vector<std::string>& args)
     return ss.str();
 }
 
-ArgumentParser::ArgumentParser(const std::string& str)
-{
-    {
-        std::vector<std::string> subs_n = split(str, '|');
-        std::string process_args = str;
-        std::string process_inputs;
-        if(subs_n.size() == 2) {
-            process_args = subs_n[1];
-            process_inputs = subs_n[0];
-        }
-        str_args_ = str2arg(process_args);
-        input_args_ = str2arg(process_inputs);
-    }
-    for(const auto& ss : str_args_) {
-        prog_args_.push_back(ss.c_str());
-    }
-    prog_args_.push_back(nullptr);
 }
-
-const char**
-ArgumentParser::args() const noexcept
-{
-    return (const char**)prog_args_.data();
-}
-
-const std::vector<std::string>&
-ArgumentParser::args_s() const noexcept
-{
-    return str_args_;
-}
-
-const std::vector<std::string>&
-ArgumentParser::input() const noexcept
-{
-    return input_args_;
-}
-
 }
