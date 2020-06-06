@@ -12,7 +12,8 @@
 * Linux
 
 ## Examples
-* blocking example with processing after the process ends
+
+#### blocking example with processing after the process ends
 ```
 #include <pexec/exec.h>
 
@@ -32,8 +33,8 @@ std::cout << "stdout(size=" << ret.proc_out.size() << "): \n" << ret.proc_out <<
 std::cout << "stderr(size=" << ret.proc_err.size() << "): \n" << ret.proc_err << std::endl;
 return 0;
 ```
-
-* blocking example with direct callbacks when process is running
+* library provides array of errors for handling purposes, some errors cannot lead to direct cancellation of the process and must be saved in bulk.
+#### Blocking example with direct callbacks when process is running
 ```
 #include <pexec/pexec.h>
 
@@ -47,8 +48,26 @@ proc.set_stdout_cb([&](const char* data, std::size_t len){
 proc.set_stderr_cb([&](const char* data, std::size_t len){
     // direct stderr pipe data
 });
-proc.set_state_cb([&](proc_status::state state, proc_status& proc) {
+proc.set_state_cb([&](pexec::proc_status::state state, proc_status& proc) {
     // state::STARTED, SIGNALED, STOPPED, USER_STOPPED
 });
 proc.exec("ls -la");
+```
+
+* when `::fork` is called, `::select` loop handles all stdout/err file descriptors
+* library provides a way to stop the loop using additional pipe that can be used break the loop
+* stop method `proc_status::user_stop()` can be called on `proc` object returned from state callback
+* data processing or stopping the loop can be done in different threads
+
+##### handling `stdin`:
+* `proc` object returned from state callback contains duplicated `stdin` file descriptor on which `::write` syscall can be called
+```
+proc.set_state_cb([&](proc_status::state state, proc_status& proc) {
+    // signal different thread that process is active or handle locally
+    if(state == pexec::proc_status::state::STARTED) {
+        const char* msg = "Hello world\n";
+        assert(proc.stdin_fd != -1);
+        ::write(proc.stdin_fd, msg, strlen(msg));
+    }
+});
 ```
