@@ -2,7 +2,9 @@
 #include <pexec/exec.h>
 
 int main() {
-    auto ret = pexec::exec("wget https://www.google.com");
+
+    auto ret = pexec::exec("ls -la");
+
     std::cout << "process \n" << ret.proc;
     if(!ret.err.empty()) {
         std::cout << "error: ";
