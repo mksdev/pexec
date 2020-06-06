@@ -1,5 +1,5 @@
 # pexec 
-* pexec is process spawning library, replacement for `::system` or `::popen` functions that providess process stdout/err outputs and various state callbacks.
+* pexec is process spawning library, replacement for `::system` or `::popen` functions that provides process stdout/err outputs and various state callbacks.
 
 ## Limitations
 * library internally registers signal handler for SIGCHLD and then waits in ::select loop for process to end.
