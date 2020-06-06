@@ -1,13 +1,17 @@
 # pexec 
 * pexec is process spawning library, replacement for `::system` or `::popen` functions that providess process stdout/err outputs and various state callbacks.
 
-# Limitations
+## Limitations
 * library internally registers signal handler for SIGCHLD and then waits in ::select loop for process to end.
-* only pexec call can be made since multiple calls would override signal handler and break all other calls
+* only one pexec call can be made since multiple calls would override signal handler and break all other calls
 * do not use this library if you need to spawn and handle multiple processes at the same time.
-* if you require multi-process handling, contact me.
+* if you require multi-process handling, contact me
 
-## example
+## Supported platforms
+* macOS
+* Linux
+
+## Examples
 * blocking example with processing after the process ends
 ```
 #include <pexec/exec.h>
