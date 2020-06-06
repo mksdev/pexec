@@ -1,8 +1,8 @@
 
-#include <pexec/pexec.h>
+#include <pexec/exec.h>
 
 int main() {
-    auto ret = pexec::exec("ls -la /");
+    auto ret = pexec::exec("wget https://www.google.com");
     std::cout << "process \n" << ret.proc;
     if(!ret.err.empty()) {
         std::cout << "error: ";

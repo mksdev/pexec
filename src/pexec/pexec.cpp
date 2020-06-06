@@ -6,6 +6,3 @@
 
 using namespace pexec;
 
-namespace {
-
-}

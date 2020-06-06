@@ -21,140 +21,13 @@
 #include "proc_status.h"
 #include "argument_parser.h"
 
+#include "error.h"
+#include "util.h"
+
 namespace pexec {
-
-int fd_set_nonblock(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    flags |= O_NONBLOCK;
-    return fcntl(fd, F_SETFL, flags);
-}
-
-int fd_set_cloexec(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    flags |= O_CLOEXEC;
-    return fcntl(fd, F_SETFL, flags);
-}
-
-int fd_unset_nonblock(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    flags &= ~O_NONBLOCK;
-    return fcntl(fd, F_SETFL, flags);
-}
-
-#if defined __APPLE__
-typedef void (*__sighandler_t) (int);
-
-int pipe2(int* p, int flags) {
-    int ret = 0;
-    if((ret = pipe(p)) < 0) return -1;
-    if(flags == 0) return ret;
-
-    if((flags & O_NONBLOCK) == O_NONBLOCK) {
-        if(fd_set_nonblock(p[0]) < 0) return -1;
-        if(fd_set_nonblock(p[1]) < 0) return -1;
-    }
-    if((flags & O_CLOEXEC) == O_CLOEXEC) {
-        if(fd_set_cloexec(p[0]) < 0) return -1;
-        if(fd_set_cloexec(p[1]) < 0) return -1;
-    }
-    return ret;
-}
-#endif
-
-void close_fd(int* fd) {
-    if(*fd >= 0) {
-        close(*fd);
-        *fd = -1;
-    }
-}
-
-void close_pipe(int* pipe) {
-    close_fd(&pipe[0]);
-    close_fd(&pipe[1]);
-}
-
-std::vector<char *> arg2argc(const std::vector<std::string>& args) {
-    std::vector<char*> args_c;
-    args_c.reserve(args.size()+1);
-    for(auto& arg : args) {
-        args_c.emplace_back((char*)arg.c_str());
-    }
-    args_c.emplace_back(nullptr);
-    return args_c;
-}
 
 using fd_callback = std::function<void(const char* buffer, std::size_t size)>;
 using fd_state_callback = std::function<void(proc_status::state, proc_status&)>;
-
-int pipe_signal[2] = {-1, -1};
-
-void signal_handler(int sig) {
-    ::write(pipe_signal[1], (void *)&sig, sizeof(sig));
-}
-
-enum class status : int {
-    SUCESSS,
-    SIGACTION_SET_ERROR,
-    SIGACTION_RESET_ERROR,
-    STDIN_PIPE_ERROR,
-    STDERR_PIPE_ERROR,
-    STDOUT_PIPE_ERROR,
-    FORK_ERROR,
-    ARG_PARSE_ERROR,
-    ARG_PARSE_C_ERROR,
-    SIGNAL_PIPE_ERROR,
-    WATCH_PIPE_ERROR,
-    SIG_BLOCK_ERROR,
-    SIG_UNBLOCK_ERROR,
-    SELECT_ERROR,
-    STDOUT_PIPE_READ_ERROR,
-    STDERR_PIPE_READ_ERROR,
-    SIGNAL_PIPE_READ_ERROR,
-    WATCH_PIPE_READ_ERROR,
-    WAITPID_ERROR,
-    FORK_EXEC_ERROR, //100
-    FORK_STDIN_NONBLOCK_ERROR, //101
-    FORK_STDOUT_NONBLOCK_ERROR, //102
-    FORK_STDERR_NONBLOCK_ERROR, //103
-    FORK_DUP2_STDIN_ERROR, //104
-    FORK_DUP2_STDOUT_ERROR, //105
-    FORK_DUP2_STDERR_ERROR, //106
-};
-
-
-std::string status2string(enum status err) {
-    switch (err) {
-        case status::SUCESSS: return "SUCESSS";
-        case status::SIGACTION_SET_ERROR: return "SIGACTION_SET_ERROR";
-        case status::SIGACTION_RESET_ERROR: return "SIGACTION_RESET_ERROR";
-        case status::STDIN_PIPE_ERROR: return "STDIN_PIPE_ERROR";
-        case status::STDERR_PIPE_ERROR: return "STDERR_PIPE_ERROR";
-        case status::STDOUT_PIPE_ERROR: return "STDOUT_PIPE_ERROR";
-        case status::FORK_ERROR: return "FORK_ERROR";
-        case status::ARG_PARSE_ERROR: return "ARG_PARSE_ERROR";
-        case status::ARG_PARSE_C_ERROR: return "ARG_PARSE_C_ERROR";
-        case status::SIGNAL_PIPE_ERROR: return "SIGNAL_PIPE_ERROR";
-        case status::WATCH_PIPE_ERROR: return "WATCH_PIPE_ERROR";
-        case status::SIG_BLOCK_ERROR: return "SIG_BLOCK_ERROR";
-        case status::SIG_UNBLOCK_ERROR: return "SIG_UNBLOCK_ERROR";
-        case status::SELECT_ERROR: return "SELECT_ERROR";
-        case status::STDOUT_PIPE_READ_ERROR: return "STDOUT_PIPE_READ_ERROR";
-        case status::STDERR_PIPE_READ_ERROR: return "STDERR_PIPE_READ_ERROR";
-        case status::SIGNAL_PIPE_READ_ERROR: return "SIGNAL_PIPE_READ_ERROR";
-        case status::WATCH_PIPE_READ_ERROR: return "WATCH_PIPE_READ_ERROR";
-        case status::WAITPID_ERROR: return "WAITPID_ERROR";
-        case status::FORK_EXEC_ERROR: return "FORK_EXEC_ERROR";
-        case status::FORK_STDIN_NONBLOCK_ERROR: return "FORK_STDIN_NONBLOCK_ERROR";
-        case status::FORK_STDOUT_NONBLOCK_ERROR: return "FORK_STDOUT_NONBLOCK_ERROR";
-        case status::FORK_STDERR_NONBLOCK_ERROR: return "FORK_STDERR_NONBLOCK_ERROR";
-        case status::FORK_DUP2_STDIN_ERROR: return "FORK_DUP2_STDIN_ERROR";
-        case status::FORK_DUP2_STDOUT_ERROR: return "FORK_DUP2_STDOUT_ERROR";
-        case status::FORK_DUP2_STDERR_ERROR: return "FORK_DUP2_STDERR_ERROR";
-    }
-
-}
-
-using error_status = std::function<void(status)>;
 
 template<int BUFFER_SIZE = 1024>
 class pexec {
@@ -164,9 +37,9 @@ class pexec {
     fd_callback stdout_cb_ = [&](const char* data, std::size_t len){};
     fd_callback stderr_cb_ = [&](const char* data, std::size_t len){};
     fd_state_callback state_cb_ = [&](proc_status::state state, proc_status& proc) {};
-    error_status error_cb_ = [](enum status s){};
+    error_status error_cb_ = [](enum error s){};
 
-    status state_ = status::SUCESSS;
+    error state_ = error::NO_ERROR;
 
     sigset_t signal_set_{};
     // create communication pipes
@@ -192,7 +65,6 @@ class pexec {
 
     std::string spawn_process_arg_;
 
-public:
     void prepare_signal_set() {
         sigemptyset(&signal_set_);
         sigaddset(&signal_set_, SIGCHLD);
@@ -208,27 +80,27 @@ public:
 
     bool prepare_fork_pipes() {
         if(pipe2(pipe_stdin_, O_NONBLOCK) < 0) {
-            process_error(status::STDIN_PIPE_ERROR);
+            process_error(error::STDIN_PIPE_ERROR);
             close_fork_pipes();
             return false;
         }
         if(pipe2(pipe_stdout_, O_NONBLOCK) < 0) {
-            process_error(status::STDOUT_PIPE_ERROR);
+            process_error(error::STDOUT_PIPE_ERROR);
             close_fork_pipes();
             return false;
         }
         if(pipe2(pipe_stderr_, O_NONBLOCK) < 0) {
-            process_error(status::STDERR_PIPE_ERROR);
+            process_error(error::STDERR_PIPE_ERROR);
             close_fork_pipes();
             return false;
         }
         if(pipe2(pipe_signal, O_CLOEXEC | O_NONBLOCK) < 0) {
-            process_error(status::SIGNAL_PIPE_ERROR);
+            process_error(error::SIGNAL_PIPE_ERROR);
             close_fork_pipes();
             return false;
         }
         if(pipe2(pipe_close_watch_, O_CLOEXEC | O_NONBLOCK) < 0) {
-            process_error(status::WATCH_PIPE_ERROR);
+            process_error(error::WATCH_PIPE_ERROR);
             close_fork_pipes();
             return false;
         }
@@ -239,13 +111,13 @@ public:
         // parse program agrumets to the array
         args_ = util::str2arg(spawn_process_arg_);
         if(args_.empty()) {
-            process_error(status::ARG_PARSE_ERROR);
+            process_error(error::ARG_PARSE_ERROR);
             close_fork_pipes();
             return false;
         }
         args_c_ = arg2argc(args_);
         if(args_c_.size() < 2) {
-            process_error(status::ARG_PARSE_C_ERROR);
+            process_error(error::ARG_PARSE_C_ERROR);
             close_fork_pipes();
             return false;
         }
@@ -261,7 +133,7 @@ public:
             // set signal handler, save previous
             auto sigaction_ret = ::sigaction(SIGCHLD, &sa_, &sa_prev_);
             if(sigaction_ret == -1) {
-                process_error(status::SIGACTION_SET_ERROR);
+                process_error(error::SIGACTION_SET_ERROR);
                 close_fork_pipes();
                 return false;
             }
@@ -273,26 +145,26 @@ public:
         //reset SIGCHLD signal handler
         auto sigaction_ret = ::sigaction(SIGCHLD, &sa_prev_, nullptr);
         if(sigaction_ret == -1) {
-            process_error(status::SIGACTION_RESET_ERROR);
+            process_error(error::SIGACTION_RESET_ERROR);
             return false;
         }
         return true;
     }
 
-    void process_error(enum status st) {
+    void process_error(enum error st) {
         error_cb_(st);
         state_ = st;
     }
 
     void block_sigchld() {
         if(sigprocmask(SIG_BLOCK, &signal_set_, nullptr) == -1) {
-            process_error(status::SIG_BLOCK_ERROR);
+            process_error(error::SIG_BLOCK_ERROR);
         }
     }
 
     void unblock_sigchld() {
         if(sigprocmask(SIG_UNBLOCK, &signal_set_, nullptr) == -1) {
-            process_error(status::SIG_UNBLOCK_ERROR);
+            process_error(error::SIG_UNBLOCK_ERROR);
         }
     }
 
@@ -306,7 +178,7 @@ public:
             status_ = 0;
             errno = 0;
             if((ret = ::waitpid(proc_pid_, &status_, WNOHANG)) <= 0) {
-                process_error(status::WAITPID_ERROR);
+                process_error(error::WAITPID_ERROR);
             }
         } while(errno == EINTR);
         errno = save_errno;
@@ -327,31 +199,31 @@ public:
     void handle_proc_return_code() {
         switch (proc_.return_code) {
             case 100 : {
-                process_error(status::FORK_EXEC_ERROR);
+                process_error(error::FORK_EXEC_ERROR);
                 break;
             }
             case 101 : {
-                process_error(status::FORK_STDIN_NONBLOCK_ERROR);
+                process_error(error::FORK_STDIN_NONBLOCK_ERROR);
                 break;
             }
             case 102 : {
-                process_error(status::FORK_STDOUT_NONBLOCK_ERROR);
+                process_error(error::FORK_STDOUT_NONBLOCK_ERROR);
                 break;
             }
             case 103 : {
-                process_error(status::FORK_STDERR_NONBLOCK_ERROR);
+                process_error(error::FORK_STDERR_NONBLOCK_ERROR);
                 break;
             }
             case 104 : {
-                process_error(status::FORK_DUP2_STDIN_ERROR);
+                process_error(error::FORK_DUP2_STDIN_ERROR);
                 break;
             }
             case 105 : {
-                process_error(status::FORK_DUP2_STDOUT_ERROR);
+                process_error(error::FORK_DUP2_STDOUT_ERROR);
                 break;
             }
             case 106 : {
-                process_error(status::FORK_DUP2_STDERR_ERROR);
+                process_error(error::FORK_DUP2_STDERR_ERROR);
                 break;
             }
         }
@@ -389,7 +261,7 @@ public:
                 errno = 0;
                 if ((select_ret = select(max_fd + 1, &read_fds, nullptr, nullptr, nullptr)) < 0) {
                     if(errno != EINTR) {
-                        process_error(status::SELECT_ERROR);
+                        process_error(error::SELECT_ERROR);
                         failed = true;
                         break;
                     }
@@ -403,7 +275,7 @@ public:
 
             if (FD_ISSET(pipe_stdout_[0], &read_fds)) {
                 if ((rc = read(pipe_stdout_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
-                    process_error(status::STDOUT_PIPE_READ_ERROR);
+                    process_error(error::STDOUT_PIPE_READ_ERROR);
                     break;
                 }
                 if (rc == 0) continue;
@@ -413,7 +285,7 @@ public:
 
             if (FD_ISSET(pipe_stderr_[0], &read_fds)) {
                 if ((rc = read(pipe_stderr_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
-                    process_error(status::STDERR_PIPE_READ_ERROR);
+                    process_error(error::STDERR_PIPE_READ_ERROR);
                     break;
                 }
                 if (rc == 0) continue;
@@ -428,7 +300,7 @@ public:
                 int want_read = sizeof(signal);
                 do {
                     if ((rc = read(pipe_signal[0], static_cast<void*>((char*)(&signal) + read_from), want_read)) < 0) {
-                        process_error(status::SIGNAL_PIPE_READ_ERROR);
+                        process_error(error::SIGNAL_PIPE_READ_ERROR);
                         break;
                     }
                     read_from += rc;
@@ -450,7 +322,7 @@ public:
                 do {
                     if ((rc = read(pipe_close_watch_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
                         if(errno != EAGAIN) {
-                            process_error(status::WATCH_PIPE_READ_ERROR);
+                            process_error(error::WATCH_PIPE_READ_ERROR);
                         }
                         break;
                     }
@@ -467,7 +339,7 @@ public:
         do {
             if ((rc = read(pipe_stdout_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
                 if(errno != EAGAIN) {
-                    process_error(status::STDOUT_PIPE_READ_ERROR);
+                    process_error(error::STDOUT_PIPE_READ_ERROR);
                 }
                 break;
             }
@@ -480,7 +352,7 @@ public:
         do {
             if ((rc = read(pipe_stderr_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
                 if(errno != EAGAIN) {
-                    process_error(status::STDERR_PIPE_READ_ERROR);
+                    process_error(error::STDERR_PIPE_READ_ERROR);
                 }
                 break;
             }
@@ -490,26 +362,10 @@ public:
         }while(true);
     }
 
-    void set_stdout_cb(fd_callback cb) {
-        stdout_cb_ = std::move(cb);
-    }
-
-    void set_stderr_cb(fd_callback cb) {
-        stderr_cb_ = std::move(cb);
-    }
-
-    void set_state_cb(fd_state_callback cb) {
-        state_cb_ = std::move(cb);
-    }
-
-    void set_error_cb(error_status cb) {
-        error_cb_ = std::move(cb);
-    }
-
     bool spawn_proc() {
         proc_pid_ = fork();
         if(proc_pid_ == -1) {
-            process_error(status::FORK_ERROR);
+            process_error(error::FORK_ERROR);
             close_fork_pipes();
             return false;
         }
@@ -546,9 +402,26 @@ public:
         return true;
     }
 
+public:
+    void set_stdout_cb(fd_callback cb) {
+        stdout_cb_ = std::move(cb);
+    }
+
+    void set_stderr_cb(fd_callback cb) {
+        stderr_cb_ = std::move(cb);
+    }
+
+    void set_state_cb(fd_state_callback cb) {
+        state_cb_ = std::move(cb);
+    }
+
+    void set_error_cb(error_status cb) {
+        error_cb_ = std::move(cb);
+    }
+
     void exec(const std::string& spawn_arg) noexcept {
         spawn_process_arg_ = spawn_arg;
-        state_ = status::SUCESSS;
+        state_ = error::NO_ERROR;
         if(!prepare_args()) {
             return;
         }
@@ -591,45 +464,7 @@ public:
 
         close_fork_pipes();
     }
-
 };
-
-
-struct exec_status {
-    std::string proc_out;
-    std::string proc_err;
-
-    proc_status proc;
-    std::vector<status> err;
-};
-
-exec_status exec(const std::string& arg) {
-
-    exec_status ret{};
-
-    std::ostringstream stdout_oss;
-    std::ostringstream stderr_oss;
-
-    pexec<> proc;
-    proc.set_error_cb([&](status error){
-        ret.err.push_back(error);
-    });
-    proc.set_stdout_cb([&](const char* data, std::size_t len){
-        stdout_oss << data;
-    });
-    proc.set_stderr_cb([&](const char* data, std::size_t len){
-        stderr_oss << data;
-    });
-    proc.set_state_cb([&](proc_status::state state, proc_status& proc) {
-        ret.proc = proc;
-    });
-    proc.exec(arg);
-
-    ret.proc_out = stdout_oss.str();
-    ret.proc_err = stderr_oss.str();
-
-    return ret;
-}
 
 
 }
