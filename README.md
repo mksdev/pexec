@@ -11,6 +11,17 @@
 * macOS
 * Linux
 
+## CMake
+* add repository as submodule to your project
+* add project in cmake
+```
+add_subdirectory(<path to repo>/pexec)
+```
+* link pexec to your cmake target
+```
+target_link_library(<target> pexec)
+```
+
 ## Examples
 
 #### Blocking example with processing after the process ends
