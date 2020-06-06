@@ -15,6 +15,10 @@ struct exec_status {
 
     proc_status proc;
     std::vector<error> err;
+
+    bool valid() const;
+    operator bool() const;
+
 };
 
 exec_status exec(const std::string& arg, const fd_state_callback& cb = {});

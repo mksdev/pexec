@@ -6,7 +6,7 @@
 
 namespace pexec {
 
-std::string status2string(enum error err) {
+std::string error2string(enum error err) {
     switch (err) {
         case error::NO_ERROR: return "NO_ERROR";
         case error::SIGACTION_SET_ERROR: return "SIGACTION_SET_ERROR";

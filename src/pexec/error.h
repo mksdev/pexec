@@ -39,7 +39,7 @@ enum class error : int {
     FORK_DUP2_STDERR_ERROR, //106
 };
 
-std::string status2string(enum error err);
+std::string error2string(enum error err);
 
 using error_status = std::function<void(error)>;
 
