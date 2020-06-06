@@ -8,3 +8,6 @@ target_link_libraries(pexec_simple pexec)
 
 add_executable(pexec_benchmark benchmark.cpp)
 target_link_libraries(pexec_benchmark pexec)
+
+add_executable(pexec_test_fd test_fd.cpp)
+target_link_libraries(pexec_test_fd pexec)
