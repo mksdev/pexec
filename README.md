@@ -13,7 +13,7 @@
 
 ## Examples
 
-#### blocking example with processing after the process ends
+#### Blocking example with processing after the process ends
 ```
 #include <pexec/exec.h>
 
