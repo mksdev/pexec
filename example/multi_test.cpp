@@ -1,5 +1,5 @@
 
-#include <pexec/pexec_multi.h>
+#include <pexec/pexec.h>
 #include <thread>
 
 void test_fd() {
@@ -67,19 +67,12 @@ int main() {
         procs.on_error([](pexec::error err){
             std::cout << "pexec_multi error: " << pexec::error2string(err) << ", (" << errno << ") " << strerror(errno) << "\n";
         });
-
-        std::thread th([&](){
-            procs.run();
-        });
-
         exec(procs, "wget https://www.google.com -O google.html");
-        exec(procs, "wget https://www.facebook.com -O facebook.html");
-        exec(procs, "ls -la");
-        exec(procs, "lss -la");
-
+        exec(procs, "wget https://www.google.com -O google2.html");
+        exec(procs, "wget https://www.google.com -O google3.html");
+        exec(procs, "wget https://www.google.com -O google4.html");
         procs.stop(pexec::stop_flag::STOP_WAIT);
-
-        th.join();
+        procs.run();
         std::cout << "done" << "\n";
     }
     test_fd();

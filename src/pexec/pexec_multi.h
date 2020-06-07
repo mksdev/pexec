@@ -7,8 +7,8 @@
 
 #include <pexec/signal/sigchld_handler.h>
 #include "event/select_event.h"
-#include "pexec.h"
-#include "exec.h"
+#include "pexec_single.h"
+#include "pexec_status.h"
 #include "queue_buffer.h"
 
 namespace pexec {

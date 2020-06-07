@@ -10,7 +10,13 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include "proc_status.h"
+
 namespace pexec {
+
+using fd_callback = std::function<void(const char* buffer, std::size_t size)>;
+using fd_state_callback = std::function<void(proc_status::state, proc_status&)>;
+
 
 int fd_set_nonblock(int fd);
 int fd_set_cloexec(int fd);

@@ -3,18 +3,10 @@
 //
 
 #include "exec.h"
+#include "pexec_single.h"
 
 namespace pexec {
 
-bool
-pexec_status::valid() const
-{
-    return err.empty();
-}
-
-pexec_status::operator bool() const {
-    return valid();
-}
 
 pexec_status
 exec(const std::string& arg, const fd_state_callback& cb)

@@ -5,23 +5,10 @@
 #ifndef PEXEC_EXEC_H
 #define PEXEC_EXEC_H
 
-#include "pexec.h"
+#include "util.h"
+#include "pexec_status.h"
 
 namespace pexec {
-
-struct pexec_status {
-    std::string proc_out;
-    std::string proc_err;
-
-    std::string args;
-    proc_status::state state;
-    proc_status proc;
-    std::vector<perror> err;
-
-    bool valid() const;
-    operator bool() const;
-
-};
 
 pexec_status exec(const std::string& arg, const fd_state_callback& cb = {});
 

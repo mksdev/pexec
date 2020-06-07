@@ -26,7 +26,7 @@ target_link_library(<target> pexec)
 
 #### Blocking example with processing after the process ends
 ```
-#include <pexec/exec.h>
+#include <pexec/pexec.h>
 
 auto ret = pexec::exec("lss -la");
 if(!ret) {
