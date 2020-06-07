@@ -39,4 +39,16 @@ std::string error2string(enum error err) {
     }
 }
 
+perror::perror(error err, int code)
+    : pexec_error(err), error_code(code)
+{
+
+}
+
+std::ostream&
+operator<<(std::ostream& out, perror err) {
+    out << error2string(err.pexec_error) << ", (" << err.error_code << ") " << strerror(err.error_code);
+    return out;
+}
+
 }

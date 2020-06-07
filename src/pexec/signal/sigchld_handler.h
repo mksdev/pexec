@@ -25,10 +25,8 @@ using sigchld_cb = std::function<void(pid_t, int status)>;
 
 class sigchld_handler {
     sigchld_cb cb_;
-    select_event& event;
     sigset_t signal_set_{};
     error err_ = error::NO_ERROR;
-    bool valid_ = false;
     error_status_cb error_cb_;
     void handle_sigchld();
     void prepare_signal_set();
@@ -37,38 +35,14 @@ class sigchld_handler {
     void process_error(error err);
 
 public:
-
-    event_return read_signal() {
-        ssize_t rc;
-        int fd  = sigchld_pipe_signal[0];
-        int signal = 0;
-        int read_from = 0;
-        int want_read = sizeof(signal);
-        do {
-            if ((rc = read(fd, static_cast<void*>((char*)(&signal) + read_from), want_read)) < 0) {
-                break;
-            }
-            read_from += rc;
-            want_read -= rc;
-        } while(want_read != 0);
-        if(want_read != 0) {
-            return event_return::STOP_LOOP;
-        }
-        if(signal == SIGCHLD) {
-            handle_sigchld();
-        }
-        return event_return::NOTHING;
-    }
-
-    sigchld_handler(select_event& event);
-    ~sigchld_handler();
-
+    sigchld_handler();
     sigchld_handler(const sigchld_handler&) = delete;
     sigchld_handler& operator=(const sigchld_handler&) = delete;
-
     sigchld_handler(sigchld_handler&&) = delete;
     sigchld_handler& operator=(sigchld_handler&&) = delete;
+    ~sigchld_handler();
 
+    event_return read_signal();
     void on_error(error_status_cb err);
     void on_signal(sigchld_cb cb);
     int get_read_fd();
@@ -76,6 +50,7 @@ public:
     error last_error() const noexcept;
 
     operator bool() const;
+
 };
 
 }

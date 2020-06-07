@@ -6,18 +6,6 @@
 
 namespace pexec {
 
-perror::perror(error err, int code)
-: pexec_error(err), error_code(code)
-{
-
-}
-
-std::ostream&
-operator<<(std::ostream& out, perror err) {
-    out << error2string(err.pexec_error) << ", (" << err.error_code << ") " << strerror(err.error_code);
-    return out;
-}
-
 bool
 pexec_status::valid() const
 {

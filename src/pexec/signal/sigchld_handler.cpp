@@ -124,15 +124,37 @@ sigchld_handler::process_error(error err)
     }
 }
 
-sigchld_handler::sigchld_handler(select_event& event)
-: event(event)
+sigchld_handler::sigchld_handler()
 {
         prepare_signal_set();
         if(!sigchld_set_signal_handler()) {
             process_error(error::SIGACTION_SET_ERROR);
-            valid_ = false;
             return;
         }
+}
+
+event_return
+sigchld_handler::read_signal()
+{
+    ssize_t rc;
+    int fd  = sigchld_pipe_signal[0];
+    int signal = 0;
+    int read_from = 0;
+    int want_read = sizeof(signal);
+    do {
+        if ((rc = read(fd, static_cast<void*>((char*)(&signal) + read_from), want_read)) < 0) {
+            break;
+        }
+        read_from += rc;
+        want_read -= rc;
+    } while(want_read != 0);
+    if(want_read != 0) {
+        return event_return::STOP_LOOP;
+    }
+    if(signal == SIGCHLD) {
+        handle_sigchld();
+    }
+    return event_return::NOTHING;
 }
 
 void
@@ -149,7 +171,6 @@ sigchld_handler::on_signal(sigchld_cb cb)
 
 sigchld_handler::~sigchld_handler()
 {
-    event.remove_read_event(get_read_fd());
     if(!sigchld_reset_signal_handler()) {
         process_error(error::SIGACTION_RESET_ERROR);
     }

@@ -6,13 +6,25 @@
 
 using namespace pexec;
 
+pexec_job::pexec_job(job_type t)
+: jtype(t)
+{
+
+}
+
+pexec_stop::pexec_stop()
+: pexec_job(job_type::STOP)
+{
+
+}
+
 void
 pexec_multi_handle::on_proc_stopped(std::function<void()> cb)
 {
     on_proc_stopped_cb_ = std::move(cb);
 }
 
-void pexec_multi_handle::on_stop(stat_cb cb)
+void pexec_multi_handle::on_stop(status_cb cb)
 {
     on_stop_cb_ = std::move(cb);
 }
@@ -67,4 +79,201 @@ pexec_multi_handle::pexec_multi_handle(const std::string &args)
             }
         }
     });
+}
+
+void
+pexec_multi::process_error(error err)
+{
+    if(error_cb_) {
+        error_cb_(err);
+    }
+}
+
+void
+pexec_multi::cleanup()
+{
+    stopping_ = true;
+    switch (stop_flag_) {
+        case stop_flag::STOP_USER: {
+            for(auto&& p : active_procs_) {
+                auto proc = p.second;
+                proc->ret_.proc.user_stop();
+            }
+            break;
+        }
+        case stop_flag::STOP_KILL: {
+            for(auto&& p : active_procs_) {
+                ::kill(p.first, killnum_);
+            }
+            break;
+        }
+        case stop_flag::STOP_WAIT: {
+            break;
+        }
+    }
+}
+
+void
+pexec_multi::send_job(const std::shared_ptr<pexec_job>& ptr)
+{
+    buffer.add(ptr);
+    loop.interrupt();
+}
+
+void
+pexec_multi::send_job_nullptr_stop()
+{
+    send_job(nullptr);
+}
+
+event_return
+pexec_multi::job_stop(const std::shared_ptr<pexec_stop>& stop)
+{
+    if(stopping_) {
+        return event_return::NOTHING;
+    }
+    stop_flag_ = stop->stop_flag;
+    killnum_ = stop->killnum;
+    return job_nullptr_stop();
+}
+
+event_return
+pexec_multi::job_nullptr_stop()
+{
+    if(!stopping_) {
+        cleanup();
+        return event_return::NOTHING;
+    }
+    if(active_procs_.empty()) {
+        return event_return::STOP_LOOP;
+    }
+    return event_return::NOTHING;
+}
+
+event_return
+pexec_multi::job_spawn_proc(const std::shared_ptr<pexec_multi_handle>& proc)
+{
+    if(stopping_) {
+        // do not spawn any new processes when we are in stop state
+        return event_return::NOTHING;
+    }
+
+    // execute ::fork and duplicate file descriptors
+    proc->exec();
+
+    // get pid information
+    auto pid = proc->pid();
+    assert(pid > 0);
+
+    // save for sigchld mapping
+    active_procs_[pid] = proc;
+
+    // register on stop callback
+    proc->on_proc_stopped([=]() {
+        // remove registered file descriptors
+        loop.remove_read_event(proc->fds_.watch_close_write_fd);
+        loop.remove_read_event(proc->fds_.stdout_read_fd);
+        loop.remove_read_event(proc->fds_.stderr_read_fd);
+
+        // delete from sigchld mapping;
+        auto it = active_procs_.find(pid);
+        if(it != active_procs_.end()) {
+            active_procs_.erase(it);
+        }
+
+        if(stopping_) {
+            if(active_procs_.empty()) {
+                send_job_nullptr_stop();
+            }
+        }
+    });
+
+    // register process duplicated file descriptors
+    // manual stopping of the process watching
+    loop.add_read_event(proc->fds_.watch_close_write_fd, [=](int fd){
+        return proc->proc_.read_close();
+    });
+    // reading duplicated stdout output
+    loop.add_read_event(proc->fds_.stdout_read_fd, [=](int fd){
+        return proc->proc_.read_stdout();
+    });
+    // reading duplicated stderr output
+    loop.add_read_event(proc->fds_.stderr_read_fd, [=](int fd){
+        return proc->proc_.read_stderr();
+    });
+    return event_return::NOTHING;
+}
+
+void
+pexec_multi::exec(const std::string& args, const status_cb& cb)
+{
+    auto proc = std::make_shared<pexec_multi_handle>(args);
+    proc->on_stop(cb);
+    send_job(proc);
+}
+
+void
+pexec_multi::stop(stop_flag sf, int killnum)
+{
+    auto stop_job = std::make_shared<pexec_stop>();
+    stop_job->stop_flag = sf;
+    stop_job->killnum = killnum;
+    send_job(stop_job);
+}
+
+void
+pexec_multi::on_error(error_status_cb err)
+{
+    error_cb_ = std::move(err);
+}
+
+void
+pexec_multi::run()
+{
+    // prepare separate signal handler
+    sigchld_handler sigchld;
+    if(!sigchld) {
+        process_error(sigchld.last_error());
+        return;
+    }
+    sigchld.on_error([&](error err){
+        process_error(err);
+    });
+
+    // callback for ::waitpid results
+    sigchld.on_signal([&](pid_t pid, int status){
+        auto it = active_procs_.find(pid);
+        if(it != active_procs_.end()) {
+            it->second->proc_.update_status(status);
+        }
+    });
+
+    // register signal handler pipe for processing SIGCHLD signals
+    loop.add_read_event(sigchld.get_read_fd(), [&](int fd){
+        return sigchld.read_signal();
+    });
+
+    loop.on_error([&](){
+        process_error(error::SELECT_ERROR);
+    });
+
+    // called when loop.interrupt(); is executed
+    // we use producer/consumer buffer to pass jobs into our event loop
+    // job can be for spawning new process of stopping the event-loop
+    loop.on_interrupt([&](){
+        auto job = buffer.remove();
+        if(job == nullptr) {
+            return job_nullptr_stop();
+        }
+        switch (job->jtype) {
+            case job_type::STOP: return job_stop(std::static_pointer_cast<pexec_stop>(job));
+            case job_type::SPAWN: return job_spawn_proc(std::static_pointer_cast<pexec_multi_handle>(job));
+        }
+        return event_return::NOTHING;
+    });
+
+    // run simple ::select based event loop
+    loop.loop();
+
+    loop.remove_read_event(sigchld.get_read_fd());
 }

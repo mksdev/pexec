@@ -5,6 +5,7 @@
 #ifndef PEXEC_ERROR_H
 #define PEXEC_ERROR_H
 
+#include <ostream>
 #include <string>
 #include <functional>
 
@@ -41,10 +42,15 @@ enum class error : int {
     FORK_DUP2_STDERR_ERROR, //106
 };
 
-std::string error2string(enum error err);
+struct perror {
+    error pexec_error; // pexec::error
+    int error_code; //errno
+    perror(error err, int code);
+};
 
 using error_status_cb = std::function<void(error)>;
-
+std::string error2string(enum error err);
+std::ostream& operator<<(std::ostream& out, perror err);
 
 }
 

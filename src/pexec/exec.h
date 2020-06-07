@@ -9,14 +9,6 @@
 
 namespace pexec {
 
-struct perror {
-    error pexec_error; // pexec::error
-    int error_code; //errno
-    perror(error err, int code);
-};
-
-std::ostream& operator<<(std::ostream& out, perror err);
-
 struct pexec_status {
     std::string proc_out;
     std::string proc_err;
