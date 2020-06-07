@@ -17,6 +17,7 @@
 #include <sys/wait.h>
 #include <csignal>
 #include <sstream>
+#include <pexec/event/select_event.h>
 
 #include "proc_status.h"
 #include "argument_parser.h"
@@ -29,15 +30,31 @@ namespace pexec {
 using fd_callback = std::function<void(const char* buffer, std::size_t size)>;
 using fd_state_callback = std::function<void(proc_status::state, proc_status&)>;
 
+enum type {
+    BLOCKING, NONBLOCKING
+};
+
+struct pexec_fds{
+    int stdout_read_fd;
+    int stderr_read_fd;
+    int stdin_write_fd;
+    int watch_close_write_fd;
+};
+
+class pexec_multi;
+class pexec_multi_handle;
+
 template<int BUFFER_SIZE = 1024>
 class pexec {
+
+    type type_ = type::BLOCKING;
 
     std::array<char, BUFFER_SIZE> read_buffer{};
 
     fd_callback stdout_cb_ = [&](const char* data, std::size_t len){};
     fd_callback stderr_cb_ = [&](const char* data, std::size_t len){};
     fd_state_callback state_cb_ = [&](proc_status::state state, proc_status& proc) {};
-    error_status error_cb_ = [](enum error s){};
+    error_status_cb error_cb_ = [](enum error s){};
 
     error state_ = error::NO_ERROR;
 
@@ -74,34 +91,40 @@ class pexec {
         close_pipe(pipe_stdin_);
         close_pipe(pipe_stdout_);
         close_pipe(pipe_stderr_);
-        close_pipe(pipe_signal);
+        if(type_ == type::BLOCKING) {
+            close_pipe(sigchld_blocking_pipe_signal);
+        }
         close_pipe(pipe_close_watch_);
     }
 
     bool prepare_fork_pipes() {
         if(pipe2(pipe_stdin_, O_NONBLOCK) < 0) {
             process_error(error::STDIN_PIPE_ERROR);
-            close_fork_pipes();
+            fail_stopped();
             return false;
         }
         if(pipe2(pipe_stdout_, O_NONBLOCK) < 0) {
             process_error(error::STDOUT_PIPE_ERROR);
-            close_fork_pipes();
+            fail_stopped();
             return false;
         }
         if(pipe2(pipe_stderr_, O_NONBLOCK) < 0) {
             process_error(error::STDERR_PIPE_ERROR);
-            close_fork_pipes();
+            fail_stopped();
             return false;
         }
-        if(pipe2(pipe_signal, O_CLOEXEC | O_NONBLOCK) < 0) {
-            process_error(error::SIGNAL_PIPE_ERROR);
-            close_fork_pipes();
-            return false;
+
+        if(type_ == type::BLOCKING) {
+            if(pipe2(sigchld_blocking_pipe_signal, O_CLOEXEC | O_NONBLOCK) < 0) {
+                process_error(error::SIGNAL_PIPE_ERROR);
+                fail_stopped();
+                return false;
+            }
         }
+
         if(pipe2(pipe_close_watch_, O_CLOEXEC | O_NONBLOCK) < 0) {
             process_error(error::WATCH_PIPE_ERROR);
-            close_fork_pipes();
+            fail_stopped();
             return false;
         }
         return true;
@@ -112,13 +135,13 @@ class pexec {
         args_ = util::str2arg(spawn_process_arg_);
         if(args_.empty()) {
             process_error(error::ARG_PARSE_ERROR);
-            close_fork_pipes();
+            fail_stopped();
             return false;
         }
         args_c_ = arg2argc(args_);
         if(args_c_.size() < 2) {
             process_error(error::ARG_PARSE_C_ERROR);
-            close_fork_pipes();
+            fail_stopped();
             return false;
         }
         return true;
@@ -126,7 +149,7 @@ class pexec {
 
     bool set_sigchld_signal_handler() {
         // set signal handler for SIGCHILD
-        sa_.sa_handler = signal_handler;
+        sa_.sa_handler = sigchld_blocking_signal_handler;
         sigemptyset(&sa_.sa_mask);
         sa_.sa_flags = 0;
         {
@@ -134,7 +157,7 @@ class pexec {
             auto sigaction_ret = ::sigaction(SIGCHLD, &sa_, &sa_prev_);
             if(sigaction_ret == -1) {
                 process_error(error::SIGACTION_SET_ERROR);
-                close_fork_pipes();
+                fail_stopped();
                 return false;
             }
         }
@@ -170,9 +193,7 @@ class pexec {
 
     void handle_sigchld() {
         block_sigchld();
-
         pid_t ret;
-
         int save_errno = errno;
         do {
             status_ = 0;
@@ -182,17 +203,9 @@ class pexec {
             }
         } while(errno == EINTR);
         errno = save_errno;
-
-        proc_.update_status(status_);
-        state_cb_(proc_status::state::SIGNALED, proc_);
-
-        if (!proc_.running) {
-            proc_.stdin_fd = -1;
-            proc_killed_ = true;
-            handle_proc_return_code();
-        }
-
         unblock_sigchld();
+
+        update_status(status_);
     }
 
 
@@ -232,141 +245,87 @@ class pexec {
     void loop_io() {
 
         ssize_t rc;
-        fd_set read_fds{};
-
-        // file descriptors we will watch with select
-        std::array<int, 4> watch_fds{
-                pipe_close_watch_[0],
-                pipe_stdout_[0],
-                pipe_stderr_[0],
-                pipe_signal[0]
-        };
-
-        auto max_fd = *std::max_element(watch_fds.begin(), watch_fds.end());
-
         proc_killed_ = false;
         user_stopped_ = false;
         status_ = 0;
 
-        while(true) {
-
-            bool failed = false;
-            int save_errno = errno;
+        select_event loop;
+        loop.add_read_event(pipe_close_watch_[0], [&](int fd) {
+            auto ret = read_close();
+            if(ret == event_return::NOTHING) {
+                loop.interrupt();
+            }
+            return ret;
+        });
+        loop.add_read_event(pipe_stdout_[0], [&](int fd){
+            return read_stdout();
+        });
+        loop.add_read_event(pipe_stderr_[0], [&](int fd){
+            return read_stderr();
+        });
+        loop.add_read_event(sigchld_blocking_pipe_signal[0], [&](int fd){
+            int signal = 0;
+            int read_from = 0;
+            int want_read = sizeof(signal);
             do {
-                FD_ZERO(&read_fds);
-                for(auto&& fd : watch_fds) {
-                    FD_SET(fd, &read_fds);
+                if ((rc = read(sigchld_blocking_pipe_signal[0], static_cast<void*>((char*)(&signal) + read_from), want_read)) < 0) {
+                    process_error(error::SIGNAL_PIPE_READ_ERROR);
+                    break;
                 }
-                int select_ret;
-                errno = 0;
-                if ((select_ret = select(max_fd + 1, &read_fds, nullptr, nullptr, nullptr)) < 0) {
-                    if(errno != EINTR) {
-                        process_error(error::SELECT_ERROR);
-                        failed = true;
-                        break;
-                    }
-                }
-            } while(errno == EINTR);
-            errno = save_errno;
+                read_from += rc;
+                want_read -= rc;
+            } while(want_read != 0);
+            if(want_read != 0) {
+                return event_return::STOP_LOOP;
+            }
+            if(signal == SIGCHLD) {
+                handle_sigchld();
+            }
+            if(proc_killed_) {
+                return event_return::STOP_LOOP;
+            }
+            return event_return::NOTHING;
+        });
+        loop.on_error([&](){
+            process_error(error::SELECT_ERROR);
+        });
+        loop.on_interrupt([&](){
+            user_stopped_ = true;
+            return event_return::STOP_LOOP;
+        });
 
-            if(failed) {
+        loop.loop();
+    }
+
+    void read_std_rest(int fd, const fd_callback& cb, error throw_err) {
+        ssize_t rc;
+        // reading rest of the pipe_stderr buffer
+        do {
+            errno = 0;
+            if ((rc = read(fd, read_buffer.data(), read_buffer.size() - 1)) < 0) {
+                if(errno != EINTR && errno != EAGAIN) {
+                    process_error(throw_err);
+                }
                 break;
             }
-
-            if (FD_ISSET(pipe_stdout_[0], &read_fds)) {
-                if ((rc = read(pipe_stdout_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
-                    process_error(error::STDOUT_PIPE_READ_ERROR);
-                    break;
-                }
-                if (rc == 0) continue;
-                read_buffer[rc] = 0;
-                stdout_cb_(read_buffer.data(), rc);
-            }
-
-            if (FD_ISSET(pipe_stderr_[0], &read_fds)) {
-                if ((rc = read(pipe_stderr_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
-                    process_error(error::STDERR_PIPE_READ_ERROR);
-                    break;
-                }
-                if (rc == 0) continue;
-                read_buffer[rc] = 0;
-                stderr_cb_(read_buffer.data(), rc);
-            }
-
-            if (FD_ISSET(pipe_signal[0], &read_fds)) {
-                int signal = 0;
-
-                int read_from = 0;
-                int want_read = sizeof(signal);
-                do {
-                    if ((rc = read(pipe_signal[0], static_cast<void*>((char*)(&signal) + read_from), want_read)) < 0) {
-                        process_error(error::SIGNAL_PIPE_READ_ERROR);
-                        break;
-                    }
-                    read_from += rc;
-                    want_read -= rc;
-                } while(want_read != 0);
-                if(want_read != 0) {
-                    break;
-                }
-                if(signal == SIGCHLD) {
-                    handle_sigchld();
-                }
-                if(proc_killed_) {
-                    break;
-                }
-            }
-
-            if (FD_ISSET(pipe_close_watch_[0], &read_fds)) {
-                user_stopped_ = true;
-                do {
-                    if ((rc = read(pipe_close_watch_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
-                        if(errno != EAGAIN) {
-                            process_error(error::WATCH_PIPE_READ_ERROR);
-                        }
-                        break;
-                    }
-                    if (rc == 0) continue;
-                }while(true);
-                break;
-            }
-        }
+            if (rc == 0) continue;
+            read_buffer[rc] = 0;
+            cb(read_buffer.data(), rc);
+        } while(errno == EINTR || rc == 0);
     }
 
     void loop_rest_io() {
-        ssize_t rc;
-        // reading rest of the pipe_stdout buffer
-        do {
-            if ((rc = read(pipe_stdout_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
-                if(errno != EAGAIN) {
-                    process_error(error::STDOUT_PIPE_READ_ERROR);
-                }
-                break;
-            }
-            if (rc == 0) continue;
-            read_buffer[rc] = 0;
-            stdout_cb_(read_buffer.data(), rc);
-        }while(true);
-
-        // reading rest of the pipe_stderr buffer
-        do {
-            if ((rc = read(pipe_stderr_[0], read_buffer.data(), read_buffer.size() - 1)) < 0) {
-                if(errno != EAGAIN) {
-                    process_error(error::STDERR_PIPE_READ_ERROR);
-                }
-                break;
-            }
-            if (rc == 0) continue;
-            read_buffer[rc] = 0;
-            stderr_cb_(read_buffer.data(), rc);
-        }while(true);
+        // process has stopped, but there might be some data left that we did not have time to read
+        // file descriptors are in nonblocking mode and we can read it until (errno == EAGAIN) is returned
+        read_std_rest(pipe_stdout_[0], stdout_cb_, error::STDOUT_PIPE_READ_REST_ERROR);
+        read_std_rest(pipe_stderr_[0], stderr_cb_, error::STDERR_PIPE_READ_REST_ERROR);
     }
 
     bool spawn_proc() {
         proc_pid_ = fork();
         if(proc_pid_ == -1) {
             process_error(error::FORK_ERROR);
-            close_fork_pipes();
+            fail_stopped();
             return false;
         }
         if(proc_pid_ == 0) {
@@ -402,7 +361,111 @@ class pexec {
         return true;
     }
 
+    void update_status(int status) {
+        status_ = status;
+        proc_.update_status(status);
+        call_state(proc_status::state::SIGNALED);
+        if (!proc_.running) {
+            proc_.stdin_fd = -1;
+            proc_killed_ = true;
+            handle_proc_return_code();
+            if(type_ == type::NONBLOCKING) {
+                stopped();
+            }
+        }
+    }
+
+    void user_stopped() {
+        user_stopped_ = true;
+        proc_.user_stop_fd = -1;
+        call_state(proc_status::state::USER_STOPPED);
+        close_fork_pipes();
+    }
+
+    void fail_stopped() {
+        call_state(proc_status::state::FAIL_STOPPED);
+        close_fork_pipes();
+    }
+
+    void stopped() {
+        loop_rest_io();
+        call_state(proc_status::state::STOPPED);
+        close_fork_pipes();
+    }
+
+    event_return read_close() {
+        char c;
+        ssize_t rc;
+        int fd = pipe_close_watch_[0];
+        do {
+            errno = 0;
+            if ((rc = ::read(fd, read_buffer.data(), read_buffer.size() - 1)) < 0) {
+                if(errno != EINTR) {
+                    process_error(error::WATCH_PIPE_READ_ERROR);
+                    if(type_ == type::NONBLOCKING) {
+                        fail_stopped();
+                        return event_return::NOTHING;
+                    }
+                    return event_return::STOP_LOOP;
+                }
+            }
+        } while(errno == EINTR);
+        if(type_ == type::NONBLOCKING) {
+            user_stopped();
+        }
+        return event_return::NOTHING;
+    }
+
+    event_return read_std(int fd, const fd_callback& cb, error throw_err) {
+        ssize_t rc;
+        do {
+            errno = 0;
+            if ((rc = ::read(fd, read_buffer.data(), read_buffer.size() - 1)) < 0) {
+                if(errno != EINTR) {
+                    process_error(throw_err);
+                    if(type_ == type::NONBLOCKING) {
+                        fail_stopped();
+                        return event_return::NOTHING;
+                    }
+                    return event_return::STOP_LOOP;
+                }
+            }
+        } while(errno == EINTR);
+        if (rc == 0) {
+            return event_return::SKIP_OTHER_FD;
+        }
+        if(rc == -1) {
+            // errno == EAGAIN
+            return event_return::SKIP_OTHER_FD;
+        }
+        read_buffer[rc] = 0;
+        cb(read_buffer.data(), rc);
+        return event_return::NOTHING;
+    }
+
+    event_return read_stdout() {
+        return read_std(pipe_stdout_[0], stdout_cb_, error::STDOUT_PIPE_READ_ERROR);
+    }
+
+    event_return read_stderr() {
+        return read_std(pipe_stderr_[0], stderr_cb_, error::STDERR_PIPE_READ_ERROR);
+    }
+
+    pexec_fds get_fds() {
+        pexec_fds out{};
+        out.stderr_read_fd = pipe_stderr_[0];
+        out.stdout_read_fd = pipe_stdout_[0];
+        out.stdin_write_fd = pipe_stdin_[1];
+        out.watch_close_write_fd = pipe_close_watch_[0];
+        return out;
+    }
+
 public:
+
+    void set_type(type t) {
+        type_ = t;
+    }
+
     void set_stdout_cb(fd_callback cb) {
         stdout_cb_ = std::move(cb);
     }
@@ -415,8 +478,12 @@ public:
         state_cb_ = std::move(cb);
     }
 
-    void set_error_cb(error_status cb) {
+    void set_error_cb(error_status_cb cb) {
         error_cb_ = std::move(cb);
+    }
+
+    void call_state(proc_status::state state) {
+        state_cb_(state, proc_);
     }
 
     void exec(const std::string& spawn_arg) noexcept {
@@ -430,14 +497,17 @@ public:
         if(!prepare_fork_pipes()) {
             return;
         }
-        if(!set_sigchld_signal_handler()) {
-            return;
+
+        if(type_ == type::BLOCKING) {
+            if(!set_sigchld_signal_handler()) {
+                return;
+            }
         }
 
         // spawn process
-        block_sigchld();
+        //block_sigchld();
         auto spawned = spawn_proc();
-        unblock_sigchld();
+        //unblock_sigchld();
         if(!spawned) {
             return;
         }
@@ -448,22 +518,21 @@ public:
         proc_.running = true;
         proc_.user_stop_fd = pipe_close_watch_[1];
 
-        state_cb_(proc_status::state::STARTED, proc_);
+        call_state(proc_status::state::STARTED);
 
-        loop_io();
-
-        reset_sigchld_signal_handler();
-
-        if(user_stopped_) {
-            proc_.user_stop_fd = -1;
-            state_cb_(proc_status::state::USER_STOPPED, proc_);
-        } else {
-            loop_rest_io();
-            state_cb_(proc_status::state::STOPPED, proc_);
+        if(type_ == type::BLOCKING) {
+            loop_io();
+            reset_sigchld_signal_handler();
+            if(user_stopped_) {
+                user_stopped();
+            } else {
+                stopped();
+            }
         }
-
-        close_fork_pipes();
     }
+
+    friend pexec_multi_handle;
+    friend pexec_multi;
 };
 
 

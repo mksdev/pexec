@@ -21,7 +21,7 @@ namespace pexec {
 struct proc_status {
 
     enum class state {
-        STARTED, SIGNALED, STOPPED, USER_STOPPED
+        STARTED, SIGNALED, STOPPED, USER_STOPPED, FAIL_STOPPED
     };
 
     static std::string state2str(state state) noexcept;
@@ -48,7 +48,7 @@ struct proc_status {
 
 };
 
-std::ostream& operator<<(std::ostream& out, proc_status& proc);
+std::ostream& operator<<(std::ostream& out, const proc_status& proc);
 
 }
 

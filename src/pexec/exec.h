@@ -9,19 +9,29 @@
 
 namespace pexec {
 
-struct exec_status {
+struct perror {
+    error pexec_error; // pexec::error
+    int error_code; //errno
+    perror(error err, int code);
+};
+
+std::ostream& operator<<(std::ostream& out, perror err);
+
+struct pexec_status {
     std::string proc_out;
     std::string proc_err;
 
+    std::string args;
+    proc_status::state state;
     proc_status proc;
-    std::vector<error> err;
+    std::vector<perror> err;
 
     bool valid() const;
     operator bool() const;
 
 };
 
-exec_status exec(const std::string& arg, const fd_state_callback& cb = {});
+pexec_status exec(const std::string& arg, const fd_state_callback& cb = {});
 
 }
 

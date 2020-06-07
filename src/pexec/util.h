@@ -24,8 +24,8 @@ void close_fd(int* fd);
 void close_pipe(int* pipe);
 std::vector<char *> arg2argc(const std::vector<std::string>& args);
 
-extern int pipe_signal[2];
-void signal_handler(int sig);
+extern int sigchld_blocking_pipe_signal[2];
+void sigchld_blocking_signal_handler(int sig);
 
 }
 

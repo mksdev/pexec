@@ -13,7 +13,8 @@ proc_status::state2str(state state) noexcept
         case state::STARTED: return "STARTED";
         case state::SIGNALED: return "SIGNALED";
         case state::STOPPED: return "STOPPED";
-        case state::USER_STOPPED: return "STOPPED";
+        case state::USER_STOPPED: return "USER_STOPPED";
+        case state::FAIL_STOPPED: return "FAIL_STOPPED";
     }
 }
 
@@ -69,7 +70,7 @@ proc_status::update_status(int status) noexcept
 
 namespace pexec {
 
-std::ostream& operator<<(std::ostream& out, proc_status& proc) {
+std::ostream& operator<<(std::ostream& out, const proc_status& proc) {
     out << "pid: " << proc.pid << "\n";
     out << "running: " << proc.running << "\n";
     out << "status: " << proc.wstatus << "\n";

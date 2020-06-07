@@ -24,6 +24,8 @@ std::string error2string(enum error err) {
         case error::SELECT_ERROR: return "SELECT_ERROR";
         case error::STDOUT_PIPE_READ_ERROR: return "STDOUT_PIPE_READ_ERROR";
         case error::STDERR_PIPE_READ_ERROR: return "STDERR_PIPE_READ_ERROR";
+        case error::STDOUT_PIPE_READ_REST_ERROR: return "STDOUT_PIPE_READ_REST_ERROR";
+        case error::STDERR_PIPE_READ_REST_ERROR: return "STDERR_PIPE_READ_REST_ERROR";
         case error::SIGNAL_PIPE_READ_ERROR: return "SIGNAL_PIPE_READ_ERROR";
         case error::WATCH_PIPE_READ_ERROR: return "WATCH_PIPE_READ_ERROR";
         case error::WAITPID_ERROR: return "WAITPID_ERROR";

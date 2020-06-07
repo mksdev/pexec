@@ -6,27 +6,41 @@
 
 namespace pexec {
 
+perror::perror(error err, int code)
+: pexec_error(err), error_code(code)
+{
+
+}
+
+std::ostream&
+operator<<(std::ostream& out, perror err) {
+    out << error2string(err.pexec_error) << ", (" << err.error_code << ") " << strerror(err.error_code);
+    return out;
+}
+
 bool
-exec_status::valid() const
+pexec_status::valid() const
 {
     return err.empty();
 }
 
-exec_status::operator bool() const {
+pexec_status::operator bool() const {
     return valid();
 }
 
-exec_status
+pexec_status
 exec(const std::string& arg, const fd_state_callback& cb)
 {
-    exec_status ret{};
+    pexec_status ret{};
+
+    ret.args = arg;
 
     std::ostringstream stdout_oss;
     std::ostringstream stderr_oss;
 
     pexec<> proc;
     proc.set_error_cb([&](error err){
-        ret.err.push_back(err);
+        ret.err.emplace_back(err, errno);
     });
     proc.set_stdout_cb([&](const char* data, std::size_t len){
         stdout_oss << data;
@@ -36,6 +50,7 @@ exec(const std::string& arg, const fd_state_callback& cb)
     });
     proc.set_state_cb([&](proc_status::state state, proc_status& proc) {
         ret.proc = proc;
+        ret.state = state;
         if(cb) cb(state, proc);
     });
     proc.exec(arg);

@@ -92,12 +92,12 @@ arg2argc(const std::vector<std::string>& args)
     return args_c;
 }
 
-int pipe_signal[2] = {-1, -1};
+int sigchld_blocking_pipe_signal[2] = {-1, -1};
 
 void
-signal_handler(int sig)
+sigchld_blocking_signal_handler(int sig)
 {
-    ::write(pipe_signal[1], (void *)&sig, sizeof(sig));
+    ::write(sigchld_blocking_pipe_signal[1], (void *)&sig, sizeof(sig));
 }
 
 }

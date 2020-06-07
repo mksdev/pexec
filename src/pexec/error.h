@@ -27,6 +27,8 @@ enum class error : int {
     SELECT_ERROR,
     STDOUT_PIPE_READ_ERROR,
     STDERR_PIPE_READ_ERROR,
+    STDOUT_PIPE_READ_REST_ERROR,
+    STDERR_PIPE_READ_REST_ERROR,
     SIGNAL_PIPE_READ_ERROR,
     WATCH_PIPE_READ_ERROR,
     WAITPID_ERROR,
@@ -41,7 +43,7 @@ enum class error : int {
 
 std::string error2string(enum error err);
 
-using error_status = std::function<void(error)>;
+using error_status_cb = std::function<void(error)>;
 
 
 }
