@@ -5,6 +5,7 @@
 #ifndef PEXEC_PEXEC_H
 #define PEXEC_PEXEC_H
 
+#include "argument_parser.h"
 #include "pexec_multi.h"
 #include "pexec_single.h"
 #include "exec.h"
