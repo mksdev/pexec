@@ -7,7 +7,7 @@
 using namespace pexec;
 
 pexec_job::pexec_job(job_type t)
-: jtype(t)
+: job_type_(t)
 {
 
 }
@@ -43,6 +43,30 @@ pexec_multi_handle::pid() const noexcept
     return ret_.proc.pid;
 }
 
+void
+pexec_multi_handle::set_stdout_cb(fd_callback cb)
+{
+    stdout_cb_ = std::move(cb);
+}
+
+void
+pexec_multi_handle::set_stderr_cb(fd_callback cb)
+{
+    stderr_cb_ = std::move(cb);
+}
+
+void
+pexec_multi_handle::set_state_cb(fd_state_callback cb)
+{
+    state_cb_ = std::move(cb);
+}
+
+void
+pexec_multi_handle::set_error_cb(error_status_cb cb)
+{
+    error_cb_ = std::move(cb);
+}
+
 pexec_multi_handle::pexec_multi_handle(const std::string &args)
 : pexec_job(job_type::SPAWN)
 {
@@ -53,15 +77,30 @@ pexec_multi_handle::pexec_multi_handle(const std::string &args)
 
     // register all callbacks
     proc_.set_error_cb([&](error err){
-        ret_.err.emplace_back(err, errno);
+        if(error_cb_) {
+            error_cb_(err);
+        } else {
+            ret_.err.emplace_back(err, errno);
+        }
     });
     proc_.set_stdout_cb([&](const char* data, std::size_t len){
-        stdout_oss_ << data;
+        if(stdout_cb_) {
+            stdout_cb_(data, len);
+        } else {
+            stdout_oss_ << data;
+        }
     });
     proc_.set_stderr_cb([&](const char* data, std::size_t len){
-        stderr_oss_ << data;
+        if(stderr_cb_) {
+            stderr_cb_(data, len);
+        } else {
+            stderr_oss_ << data;
+        }
     });
     proc_.set_state_cb([&](proc_status::state state, proc_status& stat) {
+        if(state_cb_) {
+            state_cb_(state, stat);
+        }
         ret_.proc = stat;
         ret_.state = state;
         if(state == proc_status::state::STOPPED || state == proc_status::state::USER_STOPPED || state == proc_status::state::FAIL_STOPPED) {
@@ -84,6 +123,7 @@ pexec_multi_handle::pexec_multi_handle(const std::string &args)
 void
 pexec_multi::process_error(error err)
 {
+    err_ = err;
     if(error_cb_) {
         error_cb_(err);
     }
@@ -103,7 +143,7 @@ pexec_multi::cleanup()
         }
         case stop_flag::STOP_KILL: {
             for(auto&& p : active_procs_) {
-                ::kill(p.first, killnum_);
+                ::kill(p.first, stop_signum_);
             }
             break;
         }
@@ -133,7 +173,7 @@ pexec_multi::job_stop(const std::shared_ptr<pexec_stop>& stop)
         return event_return::NOTHING;
     }
     stop_flag_ = stop->stop_flag;
-    killnum_ = stop->killnum;
+    stop_signum_ = stop->signum;
     return job_nullptr_stop();
 }
 
@@ -208,7 +248,23 @@ void
 pexec_multi::exec(const std::string& args, const status_cb& cb)
 {
     auto proc = std::make_shared<pexec_multi_handle>(args);
+    if(proc == nullptr) {
+        process_error(error::EXEC_ALLOCATION_ERROR);
+        return;
+    }
     proc->on_stop(cb);
+    send_job(proc);
+}
+
+void
+pexec_multi::exec(const std::string& args, const proc_cb& cb)
+{
+    auto proc = std::make_shared<pexec_multi_handle>(args);
+    if(proc == nullptr) {
+        process_error(error::EXEC_ALLOCATION_ERROR);
+        return;
+    }
+    cb(*proc);
     send_job(proc);
 }
 
@@ -217,7 +273,7 @@ pexec_multi::stop(stop_flag sf, int killnum)
 {
     auto stop_job = std::make_shared<pexec_stop>();
     stop_job->stop_flag = sf;
-    stop_job->killnum = killnum;
+    stop_job->signum = killnum;
     send_job(stop_job);
 }
 
@@ -225,6 +281,12 @@ void
 pexec_multi::on_error(error_status_cb err)
 {
     error_cb_ = std::move(err);
+}
+
+error
+pexec_multi::last_error() const noexcept
+{
+    return err_;
 }
 
 void
@@ -266,7 +328,7 @@ pexec_multi::run()
         if(job == nullptr) {
             return job_nullptr_stop();
         }
-        switch (job->jtype) {
+        switch (job->job_type_) {
             case job_type::STOP: return job_stop(std::static_pointer_cast<pexec_stop>(job));
             case job_type::SPAWN: return job_spawn_proc(std::static_pointer_cast<pexec_multi_handle>(job));
         }
@@ -281,6 +343,6 @@ pexec_multi::run()
 
     // reset stopping flags to enable re-run
     stop_flag_ = stop_flag::STOP_WAIT;
-    killnum_ = -1;
+    stop_signum_ = -1;
     stopping_ = false;
 }

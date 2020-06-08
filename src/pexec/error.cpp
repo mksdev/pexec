@@ -36,6 +36,7 @@ std::string error2string(enum error err) {
         case error::FORK_DUP2_STDIN_ERROR: return "FORK_DUP2_STDIN_ERROR";
         case error::FORK_DUP2_STDOUT_ERROR: return "FORK_DUP2_STDOUT_ERROR";
         case error::FORK_DUP2_STDERR_ERROR: return "FORK_DUP2_STDERR_ERROR";
+        case error::EXEC_ALLOCATION_ERROR: return "EXEC_ALLOCATION_ERROR";
     }
 }
 

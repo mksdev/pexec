@@ -40,6 +40,7 @@ enum class error : int {
     FORK_DUP2_STDIN_ERROR, //104
     FORK_DUP2_STDOUT_ERROR, //105
     FORK_DUP2_STDERR_ERROR, //106
+    EXEC_ALLOCATION_ERROR
 };
 
 struct perror {

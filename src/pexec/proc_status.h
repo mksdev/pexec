@@ -21,7 +21,16 @@ namespace pexec {
 struct proc_status {
 
     enum class state {
-        STARTED, SIGNALED, STOPPED, USER_STOPPED, FAIL_STOPPED
+        // process successfully forked
+        STARTED,
+        // called from SIGCHLD handler
+        SIGNALED,
+        // process exited
+        STOPPED,
+        // user manually closed process watching, duplicated file descriptors has been closed, but process has not been filled
+        USER_STOPPED,
+        // process watching has stopped due to some internal error, check errors from error callback
+        FAIL_STOPPED
     };
 
     static std::string state2str(state state) noexcept;
