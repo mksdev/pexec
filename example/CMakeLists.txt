@@ -14,3 +14,9 @@ target_link_libraries(pexec_test_fd pexec)
 
 add_executable(pexec_multi multi_test.cpp)
 target_link_libraries(pexec_multi pexec)
+
+add_executable(pexec_multi_example multi_example.cpp)
+target_link_libraries(pexec_multi_example pexec)
+
+add_executable(pexec_multi_thread_example multi_thread_example.cpp)
+target_link_libraries(pexec_multi_thread_example pexec)

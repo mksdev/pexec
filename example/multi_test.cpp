@@ -70,8 +70,8 @@ int main() {
         });
         exec(procs, "ls -la");
         exec(procs, "ls -la");
-        exec(procs, "wget https://www.google.com");
-        procs.stop(pexec::stop_flag::STOP_KILL, SIGKILL);
+        exec(procs, "ls -la");
+        procs.stop(pexec::stop_flag::STOP_WAIT);
         procs.run();
         std::cout << "done" << "\n";
     }

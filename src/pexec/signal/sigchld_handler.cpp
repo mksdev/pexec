@@ -91,22 +91,47 @@ void
 sigchld_handler::handle_sigchld()
 {
     block_sigchld();
-    pid_t pid;
-    int status = 0;
     int save_errno = errno;
     do {
-        pid = 0;
-        status = 0;
+        pid_t pid = 0;
+        int status = 0;
         errno = 0;
         // SIGCHLD is not queued in the system so multiple childs can be killed, but only one SIGCHLD is generated
-        if((pid = ::waitpid(0, &status, WNOHANG)) <= 0) {
+        /*
+         * from: https://linux.die.net/man/3/waitpid
+         *
+         * Return Value
+         * If wait() or waitpid() returns because the status of a child process is available,
+         * these functions shall return a value equal to the process ID of the child process for which status is
+         * reported. If wait() or waitpid() returns due to the delivery of a signal to the calling process, -1 shall be
+         * returned and errno set to [EINTR]. If waitpid() was invoked with WNOHANG set in options,
+         * it has at least one child process specified by pid for which status is not available,
+         * and status is not available for any process specified by pid, 0 is returned. Otherwise,
+         * (pid_t)-1 shall be returned, and errno set to indicate the error.
+         * The waitpid() function shall fail if:
+         * ECHILD
+         *      The process specified by pid does not exist or is not a child of the calling process,
+         *      or the process group specified by pid does not exist or does not have any member process
+         *      that is a child of the calling process.
+         * EINTR
+         *      The function was interrupted by a signal. The value of the location pointed to by stat_loc is undefined.
+         * EINVAL
+         *      The options argument is not valid.
+         */
+        if((pid = ::waitpid(0, &status, WNOHANG)) < 0) {
             if(errno == ECHILD) {
+                // no childs to process
                 break;
+            } else if(errno == EINTR) {
+                // some signal has been delivered and interrupted syscall
+                continue;
             }
             process_error(error::WAITPID_ERROR);
+            break;
         }
-        if(errno == EINTR) {
-            continue;
+        if(pid == 0) {
+            // "status is not available for any process specified"
+            break;
         }
         if(cb_) {
             cb_(pid, status);

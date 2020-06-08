@@ -26,8 +26,13 @@ select_event::select_event()
     assert(ret >= 0);
     add_read_event(control_pipe[0], [&](int fd){
         char c;
-        auto ret = ::read(fd, &c, sizeof(c));
+        ssize_t ret;
+        do {
+            errno = 0;
+            ret = ::read(fd, &c, sizeof(c));
+        } while (errno == EINTR);
         assert(ret >= 0);
+
         if(on_interrupt_) {
             return on_interrupt_();
         }
