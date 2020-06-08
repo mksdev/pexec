@@ -276,5 +276,11 @@ pexec_multi::run()
     // run simple ::select based event loop
     loop.loop();
 
+    // remove sigchld ginal handler pipe
     loop.remove_read_event(sigchld.get_read_fd());
+
+    // reset stopping flags to enable re-run
+    stop_flag_ = stop_flag::STOP_WAIT;
+    killnum_ = -1;
+    stopping_ = false;
 }
