@@ -9,3 +9,4 @@ add_library(pexec STATIC ${SOURCE_FILES} ${SOURCE_FILES_2})
 target_include_directories(pexec PUBLIC src)
 
 add_subdirectory(example)
+add_subdirectory(test)
