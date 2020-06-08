@@ -38,7 +38,8 @@ std::ostream& operator<<(std::ostream& out, const std::vector<T>& vec) {
 
 int main() {
 
-    std::function<void(pexec::pexec_multi&, const std::string&)> exec = [](pexec::pexec_multi& procs, const std::string& args){
+    using exec_handle = std::function<void(pexec::pexec_multi&, const std::string&)>;
+    exec_handle exec = [](pexec::pexec_multi& procs, const std::string& args){
         procs.exec(args, [&](const pexec::pexec_status& ret){
             std::cout << ret.proc;
             std::cout << "args: " << ret.args << "\n";
@@ -59,19 +60,18 @@ int main() {
             if(ret.proc_err.empty() || ret.proc_err.empty()) {
                 std::cout << "\n";
             }
-
         });
     };
+
     {
         pexec::pexec_multi procs;
         procs.on_error([](pexec::error err){
             std::cout << "pexec_multi error: " << pexec::error2string(err) << ", (" << errno << ") " << strerror(errno) << "\n";
         });
-        exec(procs, "wget https://www.google.com -O google.html");
-        exec(procs, "wget https://www.google.com -O google2.html");
-        exec(procs, "wget https://www.google.com -O google3.html");
-        exec(procs, "wget https://www.google.com -O google4.html");
-        procs.stop(pexec::stop_flag::STOP_WAIT);
+        exec(procs, "ls -la");
+        exec(procs, "ls -la");
+        exec(procs, "wget https://www.google.com");
+        procs.stop(pexec::stop_flag::STOP_KILL, SIGKILL);
         procs.run();
         std::cout << "done" << "\n";
     }

@@ -236,6 +236,7 @@ pexec_multi::run()
         process_error(sigchld.last_error());
         return;
     }
+
     sigchld.on_error([&](error err){
         process_error(err);
     });

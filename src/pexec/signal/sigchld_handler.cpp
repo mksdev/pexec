@@ -9,6 +9,8 @@
 #include "sigchld_handler.h"
 #include "../util.h"
 
+using namespace pexec;
+
 namespace pexec {
 
 struct sigaction sigchld_sa_{};
@@ -28,6 +30,7 @@ sigchld_set_signal_handler()
     if(pipe2(sigchld_pipe_signal, O_CLOEXEC | O_NONBLOCK) < 0) {
         return false;
     }
+
     // set signal handler for SIGCHILD
     sigchld_sa_.sa_handler = sigchld_signal_handler;
     sigemptyset(&sigchld_sa_.sa_mask);
@@ -68,7 +71,21 @@ sigchld_get_signal_fd()
 
 }
 
-using namespace pexec;
+sigchld_handler::sigchld_handler()
+{
+    prepare_signal_set();
+    if(!sigchld_set_signal_handler()) {
+        process_error(error::SIGACTION_SET_ERROR);
+        return;
+    }
+}
+
+sigchld_handler::~sigchld_handler()
+{
+    if(!sigchld_reset_signal_handler()) {
+        process_error(error::SIGACTION_RESET_ERROR);
+    }
+}
 
 void
 sigchld_handler::handle_sigchld()
@@ -81,15 +98,22 @@ sigchld_handler::handle_sigchld()
         pid = 0;
         status = 0;
         errno = 0;
+        // SIGCHLD is not queued in the system so multiple childs can be killed, but only one SIGCHLD is generated
         if((pid = ::waitpid(0, &status, WNOHANG)) <= 0) {
+            if(errno == ECHILD) {
+                break;
+            }
             process_error(error::WAITPID_ERROR);
         }
-    } while(errno == EINTR);
+        if(errno == EINTR) {
+            continue;
+        }
+        if(cb_) {
+            cb_(pid, status);
+        }
+    } while(true);
     errno = save_errno;
     unblock_sigchld();
-    if(cb_) {
-        cb_(pid, status);
-    }
 }
 
 void
@@ -102,7 +126,7 @@ sigchld_handler::prepare_signal_set()
 void
 sigchld_handler::block_sigchld()
 {
-    if(sigprocmask(SIG_BLOCK, &signal_set_, nullptr) == -1) {
+    if(::sigprocmask(SIG_BLOCK, &signal_set_, nullptr) == -1) {
         process_error(error::SIG_BLOCK_ERROR);
     }
 }
@@ -110,7 +134,7 @@ sigchld_handler::block_sigchld()
 void
 sigchld_handler::unblock_sigchld()
 {
-    if(sigprocmask(SIG_UNBLOCK, &signal_set_, nullptr) == -1) {
+    if(::sigprocmask(SIG_UNBLOCK, &signal_set_, nullptr) == -1) {
         process_error(error::SIG_UNBLOCK_ERROR);
     }
 }
@@ -124,15 +148,6 @@ sigchld_handler::process_error(error err)
     }
 }
 
-sigchld_handler::sigchld_handler()
-{
-        prepare_signal_set();
-        if(!sigchld_set_signal_handler()) {
-            process_error(error::SIGACTION_SET_ERROR);
-            return;
-        }
-}
-
 event_return
 sigchld_handler::read_signal()
 {
@@ -143,6 +158,9 @@ sigchld_handler::read_signal()
     int want_read = sizeof(signal);
     do {
         if ((rc = read(fd, static_cast<void*>((char*)(&signal) + read_from), want_read)) < 0) {
+            if(errno == EINTR) {
+                continue;
+            }
             break;
         }
         read_from += rc;
@@ -167,13 +185,6 @@ void
 sigchld_handler::on_signal(sigchld_cb cb)
 {
     cb_ = std::move(cb);
-}
-
-sigchld_handler::~sigchld_handler()
-{
-    if(!sigchld_reset_signal_handler()) {
-        process_error(error::SIGACTION_RESET_ERROR);
-    }
 }
 
 int

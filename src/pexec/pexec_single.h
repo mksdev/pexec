@@ -329,6 +329,15 @@ class pexec {
             return false;
         }
         if(proc_pid_ == 0) {
+
+            /*
+            sigset_t ss{};
+            sigemptyset(&ss);
+            sigaddset(&ss, SIGCHLD);
+            sigprocmask(SIG_UNBLOCK, &signal_set_, nullptr);
+            ::signal(SIGCHLD, SIG_DFL);
+            */
+
             if(fd_unset_nonblock(pipe_stdin_[0]) == -1) {
                 exit(101);
             }
