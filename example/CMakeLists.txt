@@ -13,5 +13,6 @@ target_link_libraries(pexec_multi_example pexec)
 add_executable(pexec_multi_test_example multi_test.cpp)
 target_link_libraries(pexec_multi_test_example pexec)
 
+find_package(Threads REQUIRED)
 add_executable(pexec_multi_thread_example multi_thread.cpp)
-target_link_libraries(pexec_multi_thread_example pexec)
+target_link_libraries(pexec_multi_thread_example pexec Threads::Threads)

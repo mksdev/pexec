@@ -22,7 +22,7 @@ enum class job_type {
     SPAWN
 };
 
-enum class stop_flag {
+enum class stop_flag : int {
     // wait until all active processes has exited
     STOP_WAIT,
     // detach process from event loop, close all suplicated file descriptors
@@ -38,7 +38,7 @@ struct pexec_job {
 };
 
 struct pexec_stop : public pexec_job {
-    stop_flag stop_flag = stop_flag::STOP_WAIT;
+    stop_flag stop = stop_flag::STOP_WAIT;
     int signum = -1; // SIGKILL(9), SIGTERM(15), etc..
     pexec_stop();
 };

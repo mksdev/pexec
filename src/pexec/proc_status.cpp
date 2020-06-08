@@ -2,6 +2,8 @@
 // Created by Michal Němec on 05/06/2020.
 //
 
+#include <cassert>
+#include <memory.h>
 #include "proc_status.h"
 
 using namespace pexec;
@@ -88,7 +90,7 @@ std::ostream& operator<<(std::ostream& out, const proc_status& proc) {
     }
     if(proc.stopped) {
         out << "stopped: " << proc.stopped << "\n"
-            << "stopped_signal: " << proc.stopped_signal << " (" << strsignal(proc.stopped_signal) << ")" << "\n";
+            << "stopped_signal: " << proc.stopped_signal << " (" << ::strsignal(proc.stopped_signal) << ")" << "\n";
     }
     if(proc.continued) {
         out << "continued: " << proc.continued << "\n";

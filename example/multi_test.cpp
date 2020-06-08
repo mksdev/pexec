@@ -1,6 +1,8 @@
 
 #include <pexec/pexec.h>
 #include <thread>
+#include <cassert>
+#include <cstring>
 
 void test_fd() {
     std::vector<int> fds;
@@ -66,12 +68,10 @@ int main() {
     {
         pexec::pexec_multi procs;
         procs.on_error([](pexec::error err){
-            std::cout << "pexec_multi error: " << pexec::error2string(err) << ", (" << errno << ") " << strerror(errno) << "\n";
+            std::cout << "pexec_multi error: " << pexec::error2string(err) << ", (" << errno << ") " << stdrerror(errno) << "\n";
         });
         exec(procs, "ls -la");
-        exec(procs, "ls -la");
-        exec(procs, "ls -la");
-        procs.stop(pexec::stop_flag::STOP_WAIT);
+        procs.stop(pexec::stop_flag::STOP_KILL, SIGKILL);
         procs.run();
         std::cout << "done" << "\n";
     }

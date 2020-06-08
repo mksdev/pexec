@@ -6,8 +6,10 @@ set(CMAKE_CXX_FLAGS "-O0")
 
 #TODO: add test framework, gtest etc..
 
+find_package(Threads REQUIRED)
+
 add_executable(pexec_benchmark_test benchmark.cpp)
-target_link_libraries(pexec_benchmark_test pexec)
+target_link_libraries(pexec_benchmark_test pexec Threads::Threads)
 
 add_executable(pexec_fd_test fd.cpp)
 target_link_libraries(pexec_fd_test pexec)

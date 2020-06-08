@@ -9,6 +9,7 @@
 #include <string>
 #include <unistd.h>
 #include <fcntl.h>
+#include <functional>
 
 #include "proc_status.h"
 

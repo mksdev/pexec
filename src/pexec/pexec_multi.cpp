@@ -3,6 +3,7 @@
 //
 
 #include "pexec_multi.h"
+#include <cassert>
 
 using namespace pexec;
 
@@ -172,7 +173,7 @@ pexec_multi::job_stop(const std::shared_ptr<pexec_stop>& stop)
     if(stopping_) {
         return event_return::NOTHING;
     }
-    stop_flag_ = stop->stop_flag;
+    stop_flag_ = stop->stop;
     stop_signum_ = stop->signum;
     return job_nullptr_stop();
 }
@@ -272,7 +273,7 @@ void
 pexec_multi::stop(stop_flag sf, int killnum)
 {
     auto stop_job = std::make_shared<pexec_stop>();
-    stop_job->stop_flag = sf;
+    stop_job->stop = sf;
     stop_job->signum = killnum;
     send_job(stop_job);
 }

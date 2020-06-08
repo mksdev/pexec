@@ -2,6 +2,7 @@
 // Created by Michal Němec on 06/06/2020.
 //
 
+#include <cstring>
 #include "error.h"
 
 namespace pexec {
@@ -48,7 +49,7 @@ perror::perror(error err, int code)
 
 std::ostream&
 operator<<(std::ostream& out, perror err) {
-    out << error2string(err.pexec_error) << ", (" << err.error_code << ") " << strerror(err.error_code);
+    out << error2string(err.pexec_error) << ", (" << err.error_code << ") " << ::strerror(err.error_code);
     return out;
 }
 

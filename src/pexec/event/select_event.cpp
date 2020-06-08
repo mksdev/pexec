@@ -3,6 +3,7 @@
 //
 
 #include "select_event.h"
+#include <cassert>
 
 namespace pexec {
 
