@@ -68,7 +68,7 @@ int main() {
     {
         pexec::pexec_multi procs;
         procs.on_error([](pexec::error err){
-            std::cout << "pexec_multi error: " << pexec::error2string(err) << ", (" << errno << ") " << stdrerror(errno) << "\n";
+            std::cout << "pexec_multi error: " << pexec::error2string(err) << ", (" << errno << ") " << strerror(errno) << "\n";
         });
         exec(procs, "ls -la");
         procs.stop(pexec::stop_flag::STOP_KILL, SIGKILL);
