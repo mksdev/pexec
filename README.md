@@ -3,9 +3,7 @@
 
 ## Limitations
 * library internally registers signal handler for SIGCHLD and then waits in ::select loop for process to end.
-* only one pexec call can be made since multiple calls would override signal handler and break all other calls
-* do not use this library if you need to spawn and handle multiple processes at the same time.
-* if you require multi-process handling, contact me
+* only one pexec/pexec_multi::run() call should be active at given time, otherwise signal handlers will be overridden
 
 ## Supported platforms
 * macOS
@@ -69,6 +67,83 @@ proc.exec("ls -la");
 * library provides a way to stop the loop using additional pipe that can be used break the loop
 * stop method `proc_status::user_stop()` can be called on `proc` object returned from state callback
 * data processing or stopping the loop can be done in different threads
+
+#### Multi process example with processing after the process ends
+```
+pexec::pexec_multi procs;
+// calling .exec() or .stop() is thread safe,
+// library internally uses thread safe buffer that is used to sequentially process all jobs
+procs.exec("w", [](const pexec::pexec_status& status){
+    std::cout << status.proc_out << std::endl;
+});
+procs.exec("whoami", [](const pexec::pexec_status& status){
+    std::cout << status.proc_out << std::endl;
+});
+procs.exec("uname", [](const pexec::pexec_status& status){
+    std::cout << status.proc_out << std::endl;
+});
+// when executing on the same thread we must specify stopping criterion
+// otherwise .run() will wait indefinitely
+procs.stop(pexec::stop_flag::STOP_WAIT);
+
+// until now .exec() and .stop() are queue in the internal buffer and will be processed in the same order as called
+// run will block until all processes has stopped based on .stop() call
+procs.run();
+```
+
+#### Multi process example with direct callbacks when process is running
+```
+pexec::pexec_multi procs;
+// handle detailed state of the process
+procs.exec("ls -la", [](pexec::pexec_multi_handle& handle){
+    handle.set_error_cb([&](pexec::error error){
+        // pexec internal error handling
+        std::cout << "process error: " << pexec::error2string(error) << std::endl;
+    });
+    handle.set_stdout_cb([&](const char* data, std::size_t len){
+        // direct stdout pipe data
+        std::cout << "process stdout(" << len << ")" << std::string(data, len) << std::endl;
+    });
+    handle.set_stderr_cb([&](const char* data, std::size_t len){
+        // direct stderr pipe data
+        std::cout << "process stderr(" << len << ")" << std::string(data, len) << std::endl;
+    });
+    handle.set_state_cb([&](pexec::proc_status::state state, pexec::proc_status& proc) {
+        // state::STARTED, SIGNALED, STOPPED, USER_STOPPED, FAIL_STOPPED
+        std::cout << "process " << pexec::proc_status::state2str(state) << std::endl;
+
+        // you can save stdin file descriptor and use it to pass additional data with ::write
+        std::cout << "stdin_fd: " << proc.stdin_fd << "\n";
+    });
+});
+procs.stop(pexec::stop_flag::STOP_WAIT);
+procs.run();
+```
+
+#### Multi process example with different thread
+```
+pexec::pexec_multi procs;
+std::thread th([&](){
+    // run event-loop
+    procs.run();
+});
+
+... on different thread ...
+procs.exec("w", [](const pexec::pexec_status& status){
+    std::cout << status.proc_out << std::endl;
+});
+procs.exec("whoami", [](const pexec::pexec_status& status){
+    std::cout << status.proc_out << std::endl;
+});
+procs.exec("uname", [](const pexec::pexec_status& status){
+    std::cout << status.proc_out << std::endl;
+});
+// can be called later or never based on requiements
+
+... later in code ...
+procs.stop(pexec::stop_flag::STOP_WAIT);
+th.join();
+```
 
 ##### handling `stdin`:
 * `proc` object returned from state callback contains duplicated `stdin` file descriptor on which `::write` syscall can be called
