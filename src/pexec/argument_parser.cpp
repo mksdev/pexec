@@ -45,7 +45,31 @@ std::vector<std::string> str2arg(const std::string &ss) {
             ret.push_back(subs[i]);
         }
     }
-    return ret;
+    if(ret.empty()) return ret;
+
+    std::vector<std::string> out;
+    auto prev = ret[0];
+    for(int i = 1; i != ret.size(); ++i) {
+        auto& now = ret[i];
+        if(prev.empty()) {
+            continue;
+        }
+        if(prev[prev.size()-1] == '\\') {
+            //merge with now
+            std::ostringstream oss;
+            // remove '\\' from the end
+            oss << prev.substr(0, prev.size()-1);
+            oss << " ";
+            // remote ' ' from the start
+            oss << now;
+            prev = oss.str();
+        } else {
+            out.push_back(prev);
+            prev = now;
+        }
+    }
+    out.push_back(prev);
+    return out;
 }
 
 std::string arg2str(const std::vector<std::string>& args)
