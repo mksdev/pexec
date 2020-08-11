@@ -22,6 +22,20 @@ enum class job_type {
     SPAWN
 };
 
+enum class loop_type {
+    DEFAULT,
+    EXTERNAL
+};
+
+enum class fd_action {
+    ADD_EVENT,
+    REMOVE_EVENT
+};
+
+enum class fd_what {
+    READ, WRITE
+};
+
 enum class stop_flag : int {
     // wait until all active processes has exited
     STOP_WAIT,
@@ -84,7 +98,12 @@ public:
 using proc_cb = std::function<void(pexec_multi_handle&)>;
 
 class pexec_multi {
-    select_event loop;
+    int control_pipe[2] = {-1, -1};
+    loop_type type = loop_type::DEFAULT;
+
+    // prepare separate signal handler
+    std::unique_ptr<sigchld_handler> sigchld;
+    std::unique_ptr<select_event> loop;
 
     // thread-safe job buffer
     queue_buffer<std::shared_ptr<pexec_job>> buffer;
@@ -95,6 +114,9 @@ class pexec_multi {
     // error handling
     error err_ = error::NO_ERROR;
     error_status_cb error_cb_;
+
+    std::unordered_map<int, std::function<void(int)>> registered_fd_;
+    std::function<void(int, fd_action, fd_what)> register_function_cb_;
 
     // stopping criterion
     stop_flag stop_flag_ = stop_flag::STOP_WAIT;
@@ -108,15 +130,32 @@ class pexec_multi {
     event_return job_stop(const std::shared_ptr<pexec_stop>& stop);
     event_return job_nullptr_stop();
     event_return job_spawn_proc(const std::shared_ptr<pexec_multi_handle>& proc);
+    void add_read_event(int fd, const std::function<void(int)>& cb);
+    void remove_read_event(int fd);
+    void interrupt() {
+        char c = '\0';
+        ::write(control_pipe[1], &c, 1);
+    }
 
 public:
+    pexec_multi() {
+        auto ret = pipe2(control_pipe, O_CLOEXEC | O_NONBLOCK);
+        assert(ret >= 0);
+    }
+    ~pexec_multi() {
+        close_pipe(control_pipe);
+    }
+
+    void register_event(std::function<void(int, fd_action, fd_what)> cb);
+    void do_action(int fd);
+    event_return dispatch_job();
     void on_error(error_status_cb err);
     error last_error() const noexcept;
     void run();
     void exec(const std::string& args, const status_cb& cb = {});
     void exec(const std::string& args, const proc_cb& cb = {});
     void stop(stop_flag sf, int killnum = -1);
-
+    void set_type(loop_type type);
 };
 
 }

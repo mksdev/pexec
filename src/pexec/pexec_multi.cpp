@@ -158,7 +158,7 @@ void
 pexec_multi::send_job(const std::shared_ptr<pexec_job>& ptr)
 {
     buffer.add(ptr);
-    loop.interrupt();
+    interrupt();
 }
 
 void
@@ -212,9 +212,9 @@ pexec_multi::job_spawn_proc(const std::shared_ptr<pexec_multi_handle>& proc)
     // register on stop callback
     proc->on_proc_stopped([=]() {
         // remove registered file descriptors
-        loop.remove_read_event(proc->fds_.watch_close_write_fd);
-        loop.remove_read_event(proc->fds_.stdout_read_fd);
-        loop.remove_read_event(proc->fds_.stderr_read_fd);
+        remove_read_event(proc->fds_.watch_close_write_fd);
+        remove_read_event(proc->fds_.stdout_read_fd);
+        remove_read_event(proc->fds_.stderr_read_fd);
 
         // delete from sigchld mapping;
         auto it = active_procs_.find(pid);
@@ -231,15 +231,15 @@ pexec_multi::job_spawn_proc(const std::shared_ptr<pexec_multi_handle>& proc)
 
     // register process duplicated file descriptors
     // manual stopping of the process watching
-    loop.add_read_event(proc->fds_.watch_close_write_fd, [=](int fd){
+    add_read_event(proc->fds_.watch_close_write_fd, [=](int fd){
         return proc->proc_.read_close();
     });
     // reading duplicated stdout output
-    loop.add_read_event(proc->fds_.stdout_read_fd, [=](int fd){
+    add_read_event(proc->fds_.stdout_read_fd, [=](int fd){
         return proc->proc_.read_stdout();
     });
     // reading duplicated stderr output
-    loop.add_read_event(proc->fds_.stderr_read_fd, [=](int fd){
+    add_read_event(proc->fds_.stderr_read_fd, [=](int fd){
         return proc->proc_.read_stderr();
     });
     return event_return::NOTHING;
@@ -279,6 +279,40 @@ pexec_multi::stop(stop_flag sf, int killnum)
 }
 
 void
+pexec_multi::register_event(std::function<void(int, fd_action, fd_what)> cb)
+{
+    register_function_cb_ = std::move(cb);
+}
+
+void
+pexec_multi::add_read_event(int fd, const std::function<void(int)>& cb)
+{
+    registered_fd_[fd] = cb;
+    if(register_function_cb_) {
+        register_function_cb_(fd, fd_action::ADD_EVENT, fd_what::READ);
+    }
+}
+
+void
+pexec_multi::remove_read_event(int fd)
+{
+    auto it = registered_fd_.find(fd);
+    if(it != registered_fd_.end()) {
+        registered_fd_.erase(it);
+    }
+    if(register_function_cb_) {
+        register_function_cb_(fd, fd_action::REMOVE_EVENT, fd_what::READ);
+    }
+}
+
+void
+pexec_multi::do_action(int fd)
+{
+    registered_fd_[fd](fd);
+}
+
+
+void
 pexec_multi::on_error(error_status_cb err)
 {
     error_cb_ = std::move(err);
@@ -290,60 +324,111 @@ pexec_multi::last_error() const noexcept
     return err_;
 }
 
+event_return
+pexec_multi::dispatch_job() {
+    auto job = buffer.remove();
+    if(job == nullptr) {
+        return job_nullptr_stop();
+    }
+    switch (job->job_type_) {
+        case job_type::STOP: return job_stop(std::static_pointer_cast<pexec_stop>(job));
+        case job_type::SPAWN: return job_spawn_proc(std::static_pointer_cast<pexec_multi_handle>(job));
+    }
+    return event_return::NOTHING;
+}
+
 void
 pexec_multi::run()
 {
-    // prepare separate signal handler
-    sigchld_handler sigchld;
-    if(!sigchld) {
-        process_error(sigchld.last_error());
+    if(type == loop_type::DEFAULT) {
+        loop = std::unique_ptr<select_event>(new select_event());
+        register_event([&](int fd, fd_action act, fd_what) {
+            switch (act) {
+                case fd_action::ADD_EVENT: {
+                    loop->add_read_event(fd, [&](int fd_action){
+                        do_action(fd_action);
+                        return event_return::NOTHING;
+                    });
+                    break;
+                }
+                case fd_action::REMOVE_EVENT: {
+                    loop->remove_read_event(fd);
+                    break;
+                }
+            }
+        });
+
+        loop->on_error([&](){
+            process_error(error::SELECT_ERROR);
+        });
+        // called when loop.interrupt(); is executed
+        // we use producer/consumer buffer to pass jobs into our event loop
+        // job can be for spawning new process of stopping the event-loop
+        loop->on_interrupt([&](){
+            return event_return::STOP_LOOP;
+        });
+    }
+
+    sigchld = std::unique_ptr<sigchld_handler>(new sigchld_handler);
+    assert(sigchld);
+    if(!sigchld->valid()) {
+        process_error(sigchld->last_error());
         return;
     }
 
-    sigchld.on_error([&](error err){
+    sigchld->on_error([&](error err){
         process_error(err);
     });
 
     // callback for ::waitpid results
-    sigchld.on_signal([&](pid_t pid, int status){
+    sigchld->on_signal([&](pid_t pid, int status){
         auto it = active_procs_.find(pid);
         if(it != active_procs_.end()) {
             it->second->proc_.update_status(status);
         }
     });
 
+    add_read_event(control_pipe[0], [&](int fd){
+        char c;
+        ssize_t ret;
+        do {
+            errno = 0;
+            ret = ::read(fd, &c, sizeof(c));
+        } while (errno == EINTR);
+        assert(ret >= 0);
+
+        auto event_ret = dispatch_job();
+        if(event_ret == event_return::STOP_LOOP) {
+            // remove sigchld ginal handler pipe
+            remove_read_event(sigchld->get_read_fd());
+            remove_read_event(control_pipe[0]);
+
+            // reset stopping flags to enable re-run
+            stop_flag_ = stop_flag::STOP_WAIT;
+            stop_signum_ = -1;
+            stopping_ = false;
+
+            if(type == loop_type::DEFAULT) {
+                loop->interrupt();
+            }
+        }
+    });
+
     // register signal handler pipe for processing SIGCHLD signals
-    loop.add_read_event(sigchld.get_read_fd(), [&](int fd){
-        return sigchld.read_signal();
+    add_read_event(sigchld->get_read_fd(), [&](int fd){
+        return sigchld->read_signal();
     });
 
-    loop.on_error([&](){
-        process_error(error::SELECT_ERROR);
-    });
+    if(type == loop_type::DEFAULT) {
+        // run simple ::select based event loop
+        loop->loop();
+        loop.reset();
+    }
+    sigchld.reset();
+}
 
-    // called when loop.interrupt(); is executed
-    // we use producer/consumer buffer to pass jobs into our event loop
-    // job can be for spawning new process of stopping the event-loop
-    loop.on_interrupt([&](){
-        auto job = buffer.remove();
-        if(job == nullptr) {
-            return job_nullptr_stop();
-        }
-        switch (job->job_type_) {
-            case job_type::STOP: return job_stop(std::static_pointer_cast<pexec_stop>(job));
-            case job_type::SPAWN: return job_spawn_proc(std::static_pointer_cast<pexec_multi_handle>(job));
-        }
-        return event_return::NOTHING;
-    });
-
-    // run simple ::select based event loop
-    loop.loop();
-
-    // remove sigchld ginal handler pipe
-    loop.remove_read_event(sigchld.get_read_fd());
-
-    // reset stopping flags to enable re-run
-    stop_flag_ = stop_flag::STOP_WAIT;
-    stop_signum_ = -1;
-    stopping_ = false;
+void
+pexec_multi::set_type(loop_type lt)
+{
+    type = lt;
 }

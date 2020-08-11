@@ -71,7 +71,7 @@ int main() {
             std::cout << "pexec_multi error: " << pexec::error2string(err) << ", (" << errno << ") " << strerror(errno) << "\n";
         });
         exec(procs, "ls -la");
-        procs.stop(pexec::stop_flag::STOP_KILL, SIGKILL);
+        procs.stop(pexec::stop_flag::STOP_WAIT);
         procs.run();
         std::cout << "done" << "\n";
     }
