@@ -23,9 +23,10 @@ int main() {
     // run will block until all processes has stopped based on .stop() call
     procs.run();
 
+
     // we can re-run new set of processes after first batch has been executed
     // handle detailed state of the process
-    procs.exec("ls -la", [](pexec::pexec_multi_handle& handle){
+    procs.exec("dasdasd", [](pexec::pexec_multi_handle& handle){
         handle.set_error_cb([&](pexec::error error){
             // pexec internal error handling
             std::cout << "process error: " << pexec::error2string(error) << std::endl;

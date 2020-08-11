@@ -5,7 +5,9 @@
 #ifndef PEXEC_PEXEC_MULTI_H
 #define PEXEC_PEXEC_MULTI_H
 
-#include <pexec/signal/sigchld_handler.h>
+#include <cassert>
+
+#include "signal/sigchld_handler.h"
 #include "event/select_event.h"
 #include "pexec_single.h"
 #include "pexec_status.h"
@@ -85,6 +87,9 @@ class pexec_multi_handle : public pexec_job {
     pid_t pid() const noexcept;
 
 public:
+    ~pexec_multi_handle() {
+        std::cout << "destruct" << std::endl;
+    }
     explicit pexec_multi_handle(const std::string &args);
     void set_stdout_cb(fd_callback cb);
     void set_stderr_cb(fd_callback cb);
@@ -136,6 +141,7 @@ class pexec_multi {
         char c = '\0';
         ::write(control_pipe[1], &c, 1);
     }
+    void handle_stop();
 
 public:
     pexec_multi() {

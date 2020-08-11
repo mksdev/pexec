@@ -107,16 +107,18 @@ pexec_multi_handle::pexec_multi_handle(const std::string &args)
         if(state == proc_status::state::STOPPED || state == proc_status::state::USER_STOPPED || state == proc_status::state::FAIL_STOPPED) {
             ret_.proc_out = stdout_oss_.str();
             ret_.proc_err = stderr_oss_.str();
+
+            // user callback ::on_stop
+            if(on_stop_cb_) {
+                on_stop_cb_(ret_);
+            }
+
             // internal callback for handling event loop operations
             // this will call ::on_proc_stopped registered callback that will detach file descriptors from event loop
             if(on_proc_stopped_cb_) {
                 on_proc_stopped_cb_();
             }
 
-            // user callback ::on_stop
-            if(on_stop_cb_) {
-                on_stop_cb_(ret_);
-            }
         }
     });
 }
@@ -192,7 +194,7 @@ pexec_multi::job_nullptr_stop()
 }
 
 event_return
-pexec_multi::job_spawn_proc(const std::shared_ptr<pexec_multi_handle>& proc)
+pexec_multi:: job_spawn_proc(const std::shared_ptr<pexec_multi_handle>& proc)
 {
     if(stopping_) {
         // do not spawn any new processes when we are in stop state
@@ -210,11 +212,15 @@ pexec_multi::job_spawn_proc(const std::shared_ptr<pexec_multi_handle>& proc)
     active_procs_[pid] = proc;
 
     // register on stop callback
-    proc->on_proc_stopped([=]() {
+    std::weak_ptr<pexec_multi_handle> weak_proc = proc;
+    proc->on_proc_stopped([&, pid, weak_proc]() {
+        auto p = weak_proc.lock();
+        assert(p != nullptr);
+
         // remove registered file descriptors
-        remove_read_event(proc->fds_.watch_close_write_fd);
-        remove_read_event(proc->fds_.stdout_read_fd);
-        remove_read_event(proc->fds_.stderr_read_fd);
+        remove_read_event(p->fds_.watch_close_write_fd);
+        remove_read_event(p->fds_.stdout_read_fd);
+        remove_read_event(p->fds_.stderr_read_fd);
 
         // delete from sigchld mapping;
         auto it = active_procs_.find(pid);
@@ -338,6 +344,22 @@ pexec_multi::dispatch_job() {
 }
 
 void
+pexec_multi::handle_stop() {
+    // remove sigchld ginal handler pipe
+    remove_read_event(sigchld->get_read_fd());
+    remove_read_event(control_pipe[0]);
+
+    // reset stopping flags to enable re-run
+    stop_flag_ = stop_flag::STOP_WAIT;
+    stop_signum_ = -1;
+    stopping_ = false;
+
+    if(type == loop_type::DEFAULT) {
+        loop->interrupt();
+    }
+}
+
+void
 pexec_multi::run()
 {
     if(type == loop_type::DEFAULT) {
@@ -387,6 +409,13 @@ pexec_multi::run()
             it->second->proc_.update_status(status);
         }
     });
+// register signal handler pipe for processing SIGCHLD signals
+    add_read_event(sigchld->get_read_fd(), [&](int fd){
+        auto event_ret = sigchld->read_signal();
+        if(event_ret == event_return::STOP_LOOP) {
+            handle_stop();
+        }
+    });
 
     add_read_event(control_pipe[0], [&](int fd){
         char c;
@@ -399,32 +428,19 @@ pexec_multi::run()
 
         auto event_ret = dispatch_job();
         if(event_ret == event_return::STOP_LOOP) {
-            // remove sigchld ginal handler pipe
-            remove_read_event(sigchld->get_read_fd());
-            remove_read_event(control_pipe[0]);
-
-            // reset stopping flags to enable re-run
-            stop_flag_ = stop_flag::STOP_WAIT;
-            stop_signum_ = -1;
-            stopping_ = false;
-
-            if(type == loop_type::DEFAULT) {
-                loop->interrupt();
-            }
+            handle_stop();
         }
-    });
-
-    // register signal handler pipe for processing SIGCHLD signals
-    add_read_event(sigchld->get_read_fd(), [&](int fd){
-        return sigchld->read_signal();
     });
 
     if(type == loop_type::DEFAULT) {
         // run simple ::select based event loop
         loop->loop();
         loop.reset();
+
+        // when using external signal is destructed when run is repeated or in destructor
+        sigchld.reset();
     }
-    sigchld.reset();
+
 }
 
 void

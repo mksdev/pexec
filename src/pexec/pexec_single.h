@@ -180,13 +180,13 @@ class pexec {
     }
 
     void block_sigchld() {
-        if(sigprocmask(SIG_BLOCK, &signal_set_, nullptr) == -1) {
+        if(::sigprocmask(SIG_BLOCK, &signal_set_, nullptr) == -1) {
             process_error(error::SIG_BLOCK_ERROR);
         }
     }
 
     void unblock_sigchld() {
-        if(sigprocmask(SIG_UNBLOCK, &signal_set_, nullptr) == -1) {
+        if(::sigprocmask(SIG_UNBLOCK, &signal_set_, nullptr) == -1) {
             process_error(error::SIG_UNBLOCK_ERROR);
         }
     }
@@ -387,19 +387,19 @@ class pexec {
     void user_stopped() {
         user_stopped_ = true;
         proc_.user_stop_fd = -1;
-        call_state(proc_status::state::USER_STOPPED);
         close_fork_pipes();
+        call_state(proc_status::state::USER_STOPPED);
     }
 
     void fail_stopped() {
-        call_state(proc_status::state::FAIL_STOPPED);
         close_fork_pipes();
+        call_state(proc_status::state::FAIL_STOPPED);
     }
 
     void stopped() {
         loop_rest_io();
-        call_state(proc_status::state::STOPPED);
         close_fork_pipes();
+        call_state(proc_status::state::STOPPED);
     }
 
     event_return read_close() {
