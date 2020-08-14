@@ -183,7 +183,7 @@ pexec_multi::job_stop(const std::shared_ptr<pexec_stop>& stop)
 event_return
 pexec_multi::job_nullptr_stop()
 {
-    if(!stopping_) {
+    if(!stopping_ && !active_procs_.empty()) {
         cleanup();
         return event_return::NOTHING;
     }
