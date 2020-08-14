@@ -87,9 +87,6 @@ class pexec_multi_handle : public pexec_job {
     pid_t pid() const noexcept;
 
 public:
-    ~pexec_multi_handle() {
-        std::cout << "destruct" << std::endl;
-    }
     explicit pexec_multi_handle(const std::string &args);
     void set_stdout_cb(fd_callback cb);
     void set_stderr_cb(fd_callback cb);
