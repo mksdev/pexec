@@ -81,12 +81,13 @@ class pexec_multi_handle : public pexec_job {
     std::ostringstream stderr_oss_;
     status_cb on_stop_cb_;
 
-    void on_stop(status_cb cb);
+
     void on_proc_stopped(std::function<void()> cb);
     void exec();
-    pid_t pid() const noexcept;
 
 public:
+    pid_t pid() const noexcept;
+    void on_stop(status_cb cb);
     explicit pexec_multi_handle(const std::string &args);
     void set_stdout_cb(fd_callback cb);
     void set_stderr_cb(fd_callback cb);
