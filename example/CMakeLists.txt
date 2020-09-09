@@ -21,21 +21,18 @@ add_executable(pexec_multi_detail multi_detail.cpp)
 target_link_libraries(pexec_multi_detail pexec)
 
 
-find_package(Libevent)
-#  Libevent_FOUND        - True if headers and requested libraries were found
-#  Libevent_INCLUDE_DIRS - Libevent include directories
-#  Libevent_LIBRARIES    - Libevent libraries to be linked
-message(STATUS "Libevent_FOUND: ${Libevent_FOUND}")
-message(STATUS "Libevent_INCLUDE_DIRS: ${Libevent_INCLUDE_DIRS}")
-message(STATUS "Libevent_LIBRARIES: ${Libevent_LIBRARIES}")
+find_package(LIBEVENT)
+message(STATUS "LIBEVENT_FOUND: ${LIBEVENT_FOUND}")
+message(STATUS "LIBEVENT_INCLUDE_DIRS: ${LIBEVENT_INCLUDE_DIRS}")
+message(STATUS "LIBEVENT_LIBRARIES: ${LIBEVENT_LIBRARIES}")
 message("")
 
-if(Libevent_FOUND)
+if(LIBEVENT_FOUND)
     add_executable(pexec_multi_libevent2 multi_libevent2.cpp)
 
     target_include_directories(pexec_multi_libevent2 PUBLIC
-            ${Libevent_INCLUDE_DIRS})
+            ${LIBEVENT_INCLUDE_DIRS})
 
     target_link_libraries(pexec_multi_libevent2
-            ${Libevent_LIBRARIES} pexec)
+            ${LIBEVENT_LIBRARIES} pexec)
 endif()
